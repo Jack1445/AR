@@ -246,8 +246,9 @@ function filteredCandidates() {
   });
 }
 function tagPills(entry) {
+  if (!entry) return `<span class="match-muted">尚未处理</span>`;
   const tags = Object.values(entry?.tags || {}).flat();
-  return tags.length ? tags.slice(0, 7).map((tag) => `<span class="match-tag">${escapeHtml(tag)}</span>`).join("") : `<span class="match-muted">未打标签</span>`;
+  return tags.length ? tags.slice(0, 7).map((tag) => `<span class="match-tag">${escapeHtml(tag)}</span>`).join("") : `<span class="match-muted">无明确标签</span>`;
 }
 function starsHtml(entry) {
   if (!entry) return `<span class="match-muted">待评估</span>`;

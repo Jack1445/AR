@@ -1,6 +1,6 @@
 # AR × 飞书多维表格
 
-用本地命令读取和修改飞书多维表格。复制 `ar.example.json` 为 `ar.json`，将自己的多维表格链接填入 `base_url`，并在 `tables` 中填写三张表的 ID、名称和类型（当前候选人、历史候选人、JD）。可先运行 `python ar.py check` 查看可访问的数据表 ID。`ar.json` 仅保存在本机，不进入 Git。需要 Python 3.10 或更新版本。网页的一键同步使用 `keyring` 保存凭据；如果缺少，运行 `python -m pip install -r requirements.txt`。
+用本地命令读取和修改飞书多维表格。复制 `ar.example.json` 为 `ar.json`，将自己的多维表格链接填入 `base_url`，并在 `tables` 中填写三张表的 ID、名称和类型（当前候选人、历史候选人、JD）。可先运行 `python ar.py check` 查看可访问的数据表 ID。`ar.json` 仅保存在本机，不进入 Git。需要 Python 3.10 或更新版本。运行 `python -m pip install -r requirements.txt` 安装依赖：`keyring` 用于保存凭据，`pypdf` 用于在没有 `pdftotext` 时读取 PDF 简历正文。图片式扫描 PDF 仍需先做文字识别。
 
 ## 本地网页
 

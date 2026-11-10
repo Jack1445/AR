@@ -81,16 +81,23 @@ def _resume_text(record_id: str) -> str:
             continue
         suffix = path.suffix.lower()
         try:
-            if suffix == ".pdf" and shutil.which("pdftotext"):
-                output = subprocess.run(
-                    ["pdftotext", "-layout", str(path), "-"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
-                    timeout=25,
-                    check=False,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
-                parts.append(output.stdout.decode("utf-8", errors="replace"))
+            if suffix == ".pdf":
+                if shutil.which("pdftotext"):
+                    output = subprocess.run(
+                        ["pdftotext", "-layout", str(path), "-"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        timeout=25,
+                        check=False,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                    parts.append(output.stdout.decode("utf-8", errors="replace"))
+                else:
+                    try:
+                        from pypdf import PdfReader
+                    except ImportError as error:
+                        raise RuntimeError("无法读取 PDF 简历：请运行 python -m pip install -r requirements.txt") from error
+                    parts.append("\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages))
             elif suffix == ".txt":
                 parts.append(path.read_text(encoding="utf-8", errors="replace"))
             elif suffix == ".docx":
