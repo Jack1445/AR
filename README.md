@@ -24,9 +24,17 @@ python ar.py pull --all-tables
 
 此后每次运行 `pull` 都会更新网页快照。你也可以运行 `python ar.py sync`，在命令行执行同样的“仅在变化时更新”流程。`python build_web.py` 只会从现有 `downloads/` 重新生成网页快照，不连接飞书。候选人数据与生成的 `web/data.js` 已被 Git 忽略，不会随源代码提交。
 
-启动脚本会调用这台电脑上的 `D:\Miniconda3\pythonw.exe` 运行本地服务，并明确调用 Edge 或 Chrome；不会受到 `.html` 文件默认关联到 VS Code 的影响。
+启动脚本会自动寻找这台电脑上的 `pythonw.exe`，启动本地服务并用默认浏览器打开网页；不会受到 `.html` 文件默认关联到 VS Code 的影响。如果自动查找失败，可在能运行 `python ar.py` 的 PowerShell 中执行 `python web_server.py`，再访问 `http://127.0.0.1:38479/`。也可以把该电脑的 `pythonw.exe` 完整路径放入 `AR_PYTHONW` 环境变量。
 
 ## 准备
+
+如果不想逐条设置环境变量，可将 `setup-feishu-credentials.example.ps1` 复制为 `setup-feishu-credentials.ps1`，在复制出的脚本开头填写**同一个飞书应用**的 App ID 和 App Secret。这个本地脚本已被 Git 忽略。然后在项目目录的 PowerShell 中运行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\setup-feishu-credentials.ps1
+```
+
+脚本会先运行 `check`；验证成功才保存凭据。若原 PowerShell 窗口曾设置旧的 `FEISHU_APP_ID` 或 `FEISHU_APP_SECRET`，之后在原窗口运行 `python ar.py pull` 前，先执行 `Remove-Item Env:\FEISHU_APP_ID, Env:\FEISHU_APP_SECRET -ErrorAction SilentlyContinue`；否则旧环境变量会优先于已保存的凭据。设置完成后可以删除填有密钥的本地脚本，凭据仍保存在当前 Windows 用户的凭据管理器中。换电脑时需要在那台电脑重新运行一次。
 
 在**运行命令的同一个 PowerShell 窗口**里设置应用凭据：
 
