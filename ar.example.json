@@ -1,0 +1,8 @@
+{
+  "base_url": "https://example.feishu.cn/base/APP_TOKEN?table=CURRENT_CANDIDATE_TABLE_ID",
+  "tables": [
+    {"id": "CURRENT_CANDIDATE_TABLE_ID", "name": "当前候选人", "kind": "candidate", "archived": false},
+    {"id": "ARCHIVED_CANDIDATE_TABLE_ID", "name": "历史候选人", "kind": "candidate", "archived": true},
+    {"id": "JOB_TABLE_ID", "name": "校友 JD", "kind": "job", "archived": false}
+  ]
+}

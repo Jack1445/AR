@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <title>AR · 人才与机会</title>
+  <meta name="description" content="在本地浏览飞书多维表格中的候选人与校友招聘需求。">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="theme.css">
+  <script src="data.js" defer></script>
+  <script src="app.js" defer></script>
+  <script src="match.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="站点导航">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><span>A</span><span>R</span></div>
+        <div class="brand-copy"><strong>AR</strong><span>人才与机会</span></div>
+      </div>
+
+      <div class="sidebar-section-label">WORKSPACE</div>
+      <nav class="side-nav" aria-label="主要导航">
+        <button class="nav-item active" id="navOverview" type="button" aria-current="page">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+          <span>总览</span>
+        </button>
+        <button class="nav-item" id="navDirectory" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16"/><circle cx="7" cy="5" r="1"/><circle cx="7" cy="12" r="1"/><circle cx="7" cy="19" r="1"/></svg>
+          <span>人才与岗位一览</span>
+        </button>
+        <button class="nav-item" id="navMatch" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 6c5 0 5 6 10 6M7 18c5 0 5-6 10-6"/></svg>
+          <span>AI 匹配</span>
+        </button>
+        <button class="nav-item" id="navAI" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg>
+          <span>AI 管理</span>
+        </button>
+        <button class="nav-item" id="navData" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V5M16 20v-8M22 20V3M2 20h21"/></svg>
+          <span>数据中心</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="future-card"><span class="future-icon" aria-hidden="true">✦</span><span class="future-label">匹配工作台</span><strong>先筛选，再评估</strong><p>按 JD 标签初筛候选人，查看 AI 契合度。</p><span class="future-pill">本地运行</span></div>
+        <div class="sidebar-foot"><span class="live-dot"></span> 本地工作台 <span class="foot-separator">/</span> 飞书数据快照</div>
+      </div>
+    </aside>
+
+    <main class="main-content" id="mainContent">
+      <header class="topbar"><div class="breadcrumb"><span>工作台</span><span class="breadcrumb-slash">/</span><strong>总览</strong></div><div class="topbar-right"><span class="local-tag"><span class="live-dot"></span> 本地数据</span><span class="today" id="todayLabel"></span></div></header>
+
+      <div id="overviewView" class="page-view">
+      <section class="intro" aria-labelledby="pageTitle">
+        <div class="intro-overline"><span class="overline-rule"></span> TALENT × OPPORTUNITY</div>
+        <div class="intro-content"><div><h1 id="pageTitle">AR <em>人才与机会</em></h1><p>候选人与校友企业的招聘需求，在这里清晰相遇。</p></div></div>
+      </section>
+
+      <section class="metrics" aria-label="数据概览">
+        <div class="metric"><div class="metric-top"><span>在库候选人</span><span class="metric-symbol candidate-symbol" aria-hidden="true">↗</span></div><div class="metric-value" id="metricCandidates">—</div><div class="metric-foot">当前收集表</div></div>
+        <div class="metric"><div class="metric-top"><span>校友招聘需求</span><span class="metric-symbol job-symbol" aria-hidden="true">✦</span></div><div class="metric-value" id="metricJobs">—</div><div class="metric-foot">校友 JD 收集表</div></div>
+        <div class="metric"><div class="metric-top"><span>历史存档</span><span class="metric-symbol archive-symbol" aria-hidden="true">◷</span></div><div class="metric-value" id="metricArchive">—</div><div class="metric-foot">旧版候选人表</div></div>
+        <div class="metric metric-sync"><div class="metric-top"><span>数据状态</span><span class="sync-wave" aria-hidden="true">⌁</span></div><div class="sync-state"><span class="sync-dot"></span><strong id="syncState">正在载入</strong></div><div class="metric-foot" id="syncTime">从本地快照读取</div></div>
+      </section>
+
+      <section class="flow-section" aria-labelledby="flowTitle">
+        <div class="flow-heading"><div><div class="section-kicker">THE MATCHING FLOW</div><h2 id="flowTitle">让人才与机会，产生连接。</h2><p>候选人与校友企业的信息汇聚于 AI 匹配中心。点击中心节点，进入 AI 管理。</p></div><span class="flow-status"><span class="flow-status-dot"></span> 匹配功能筹备中</span></div>
+        <div class="flow-canvas" aria-label="候选人、AI 匹配中心与校友企业的流程示意">
+          <div class="flow-grid" aria-hidden="true"></div>
+          <div class="flow-column flow-column-left"><div class="flow-column-label"><span class="flow-mini-symbol">01</span> TALENT POOL <span id="flowCandidateTotal"></span></div><div id="flowCandidateNodes" class="flow-node-list"></div></div>
+          <svg class="flow-lines flow-lines-left" viewBox="0 0 260 410" preserveAspectRatio="none" aria-hidden="true"><path class="flow-line" d="M0 35 C 145 35, 110 205, 260 205"/><path class="flow-line" d="M0 100 C 145 100, 110 205, 260 205"/><path class="flow-line" d="M0 165 C 145 165, 110 205, 260 205"/><path class="flow-line" d="M0 230 C 145 230, 110 205, 260 205"/><path class="flow-line" d="M0 295 C 145 295, 110 205, 260 205"/><path class="flow-line" d="M0 360 C 145 360, 110 205, 260 205"/><path class="flow-pulse" d="M0 35 C 145 35, 110 205, 260 205"/><path class="flow-pulse delay-1" d="M0 165 C 145 165, 110 205, 260 205"/><path class="flow-pulse delay-2" d="M0 295 C 145 295, 110 205, 260 205"/></svg>
+          <div class="flow-center"><div class="ai-orbit orbit-one"></div><div class="ai-orbit orbit-two"></div><button class="ai-core" id="openPrompt" type="button" aria-label="打开 AI 管理页面"><span class="ai-core-icon" aria-hidden="true">✳</span><strong>AI</strong><span>匹配中心</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg></button><div class="ai-core-caption">点击进入 AI 管理</div></div>
+          <svg class="flow-lines flow-lines-right" viewBox="0 0 260 410" preserveAspectRatio="none" aria-hidden="true"><path class="flow-line" d="M0 205 C 150 205, 115 35, 260 35"/><path class="flow-line" d="M0 205 C 150 205, 115 100, 260 100"/><path class="flow-line" d="M0 205 C 150 205, 115 165, 260 165"/><path class="flow-line" d="M0 205 C 150 205, 115 230, 260 230"/><path class="flow-line" d="M0 205 C 150 205, 115 295, 260 295"/><path class="flow-line" d="M0 205 C 150 205, 115 360, 260 360"/><path class="flow-pulse delay-1" d="M0 205 C 150 205, 115 100, 260 100"/><path class="flow-pulse delay-2" d="M0 205 C 150 205, 115 230, 260 230"/><path class="flow-pulse" d="M0 205 C 150 205, 115 360, 260 360"/></svg>
+          <div class="flow-column flow-column-right"><div class="flow-column-label"><span class="flow-mini-symbol">02</span> ALUMNI COMPANIES <span id="flowJobTotal"></span></div><div id="flowJobNodes" class="flow-node-list"></div></div>
+        </div>
+        <div class="flow-caption"><span>01 &nbsp; 候选人资料</span><span class="flow-caption-rule"></span><span>02 &nbsp; AI 匹配规则</span><span class="flow-caption-rule"></span><span>03 &nbsp; 校友企业需求</span></div>
+      </section>
+      </div>
+
+      <div id="directoryView" class="page-view" hidden>
+
+      <section class="workspace-head" aria-labelledby="workspaceTitle"><div><div class="section-kicker">EXPLORE THE DATA</div><h2 id="workspaceTitle">人才与岗位一览</h2><p>浏览已同步到本地的飞书多维表格内容。</p></div><button class="refresh-button" type="button" id="refreshButton" title="检查飞书是否有更新"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg><span class="refresh-label">检查飞书更新</span></button></section>
+
+      <div class="notice" id="missingNotice" role="status" hidden></div>
+      <div class="sync-feedback" id="syncFeedback" role="status" hidden></div>
+
+      <section class="directory" aria-label="候选人与校友 JD">
+        <div class="directory-panel candidates-panel" id="candidatesPanel">
+          <div class="panel-heading"><div class="panel-heading-main"><span class="panel-icon candidate-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M5.5 20c.6-3.5 2.8-5.4 6.5-5.4s5.9 1.9 6.5 5.4"/></svg></span><div><div class="panel-eyebrow">TALENT POOL</div><h3>候选人 <span class="heading-count" id="candidateHeadingCount">0</span></h3></div></div><div class="panel-heading-desc">发现有潜力的下一位伙伴</div></div>
+          <div class="panel-controls"><div class="segmented" role="group" aria-label="候选人数据来源"><button type="button" class="segment active" data-candidate-tab="current" aria-pressed="true">当前候选人</button><button type="button" class="segment" data-candidate-tab="archive" aria-pressed="false">历史存档</button></div><label class="search-box"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m16 16 5 5"/></svg><input id="candidateSearch" type="search" placeholder="搜索姓名、地点、岗位…" autocomplete="off" aria-label="搜索候选人"></label></div>
+          <div class="result-line"><span id="candidateResultLabel">正在加载</span><span class="result-dash"></span><span>点击卡片查看详情</span></div>
+          <div class="card-list" id="candidateList"></div>
+        </div>
+
+        <div class="directory-panel jobs-panel" id="jobsPanel">
+          <div class="panel-heading"><div class="panel-heading-main"><span class="panel-icon job-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="13" rx="2"/><path d="M8.5 7V5.5a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2V7M4 12.5h16"/></svg></span><div><div class="panel-eyebrow">ALUMNI OPPORTUNITIES</div><h3>校友 JD <span class="heading-count" id="jobHeadingCount">0</span></h3></div></div><div class="panel-heading-desc">来自校友企业的真实机会</div></div>
+          <div class="panel-controls"><div class="job-filter-label"><span class="filter-line"></span>招聘需求列表</div><label class="search-box"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m16 16 5 5"/></svg><input id="jobSearch" type="search" placeholder="搜索公司、岗位、关键词…" autocomplete="off" aria-label="搜索校友 JD"></label></div>
+          <div class="result-line"><span id="jobResultLabel">正在加载</span><span class="result-dash"></span><span>点击卡片查看详情</span></div>
+          <div class="card-list" id="jobList"></div>
+        </div>
+      </section>
+      </div>
+
+      <div id="aiView" class="page-view ai-view" hidden>
+        <section class="section-hero"><div class="section-kicker">AI WORKSPACE / CONFIGURATION</div><h1>AI 管理<span class="hero-blue-dot">.</span></h1><p>配置模型连接，并集中维护所有岗位的匹配规则。</p></section>
+        <div class="ai-management-layout">
+          <section class="ai-connection-card" aria-labelledby="aiConnectionTitle">
+            <div class="ai-card-head"><span class="ai-card-number">01</span><div><h2 id="aiConnectionTitle">接入模型</h2><p>连接你的 AI 服务，选择用于后续分析的模型。</p></div></div>
+            <form id="aiConfigForm" autocomplete="off">
+              <label class="ai-field-label" for="aiBaseUrl">API 基础地址 <span>Base URL</span></label><input id="aiBaseUrl" class="ai-field" type="url" placeholder="https://你的服务域名/v1" spellcheck="false" autocomplete="url"><p class="ai-field-note">填写服务商提供的基础地址，通常以 /v1 结尾。</p>
+              <label class="ai-field-label" for="aiApiKey">API Key <span id="aiKeyState" class="ai-key-state">未配置</span></label><div class="ai-key-wrap"><input id="aiApiKey" class="ai-field" type="password" placeholder="输入密钥以保存或替换" spellcheck="false" autocomplete="new-password"><button id="aiKeyToggle" type="button" aria-label="显示或隐藏 API Key">显示</button></div><p class="ai-field-note">密钥存入 Windows 凭据管理器，网页不会回显已保存的密钥。</p><label class="ai-clear-key"><input id="aiClearKey" type="checkbox">清除已保存的 API Key</label>
+              <div class="ai-model-header"><label class="ai-field-label" for="aiModelSelect">选择模型 <span>Model ID</span></label><button id="aiFetchModels" type="button">获取模型列表 ↗</button></div><select id="aiModelSelect" class="ai-field"><option value="">请选择模型</option></select><button id="aiManualModelToggle" class="ai-manual-link" type="button">手动填写模型 ID</button><input id="aiManualModel" class="ai-field ai-manual-model" type="text" placeholder="输入服务商提供的模型 ID" spellcheck="false" maxlength="200" hidden><p class="ai-field-note">获取列表只读取模型目录，不发送候选人或 JD 数据。</p>
+              <button id="aiConfigSave" class="ai-primary-button" type="submit">保存连接设置 <span aria-hidden="true">↗</span></button><div id="aiConfigStatus" class="ai-config-status" role="status"></div>
+            </form>
+          </section>
+  <section class="prompt-dialog" id="promptDialog" aria-labelledby="promptTitle">
+    <div class="prompt-dialog-inner">
+      <div class="prompt-top"><span class="prompt-mark">✳</span></div>
+      <div class="section-kicker">AI MATCHING / PROMPT STUDIO</div>
+      <h2 id="promptTitle">为每条 JD 定义匹配规则。</h2>
+      <p class="prompt-lead">最终提示词 = 公共提示词 + 当前 JD 专属提示词 + 飞书 JD 原文。进入岗位匹配工作台后，可对初筛候选人进行 AI 评估。</p>
+      <div class="prompt-job-picker"><label for="promptJobSelect">当前岗位 JD</label><select id="promptJobSelect" aria-describedby="promptJobHint"></select><p id="promptJobHint">同一家企业的不同岗位分别保存专属提示词。</p></div>
+      <div class="prompt-section-list">
+        <section class="prompt-section"><div class="prompt-section-head"><span class="prompt-step">01</span><div><h3>公共提示词</h3><p>对所有岗位生效，用来定义统一的匹配原则与输出格式。</p></div><span class="prompt-scope">所有 JD 共用</span></div><textarea id="promptGlobalText" class="prompt-editor" spellcheck="false" aria-label="公共提示词"></textarea></section>
+        <section class="prompt-section"><div class="prompt-section-head"><span class="prompt-step">02</span><div><h3>JD 专属提示词</h3><p>只对上方选中的这一条岗位 JD 生效，不与同企业其他岗位共用。</p></div><span class="prompt-scope">当前 JD 专用</span></div><textarea id="promptJobText" class="prompt-editor prompt-job-editor" spellcheck="false" placeholder="例如：这个岗位特别看重的经历、需要优先核实的条件……" aria-label="当前 JD 专属提示词"></textarea></section>
+        <section class="prompt-section"><div class="prompt-section-head"><span class="prompt-step">03</span><div><h3>飞书 JD 原文</h3><p>直接读取本地同步的岗位内容；这里仅供核对，不能修改来源数据。</p></div><span class="prompt-scope prompt-scope-readonly">自动读取 · 只读</span></div><div class="prompt-source" id="promptJdSource" tabindex="0"></div><div class="prompt-split-tools"><button id="promptSplitToggle" type="button">同一栏有多个岗位？手动拆分 <span aria-hidden="true">↗</span></button><div id="promptSplitPanel" hidden><p>复制下一条岗位标题或其他独特开头文字，系统会从该位置拆成独立 JD，不修改飞书原文。</p><div class="prompt-split-row"><input id="promptSplitMarker" type="text" placeholder="粘贴下一条岗位的开头文字" aria-label="下一条岗位的开头文字"><button id="promptSplitApply" type="button">确认拆分</button></div><div class="prompt-split-status" id="promptSplitStatus" role="status"></div></div></div></section>
+      </div>
+      <details class="prompt-preview" id="promptPreview"><summary>查看最终拼接预览 <span>01 + 02 + 03</span></summary><pre id="promptCombined"></pre></details>
+      <div class="prompt-actions"><span class="prompt-save-status" id="promptSaveStatus" role="status">修改仅保存在本机浏览器</span><button class="prompt-save" id="promptSave" type="button">保存设置 <span aria-hidden="true">↗</span></button></div>
+    </div>
+  </section>
+        </div>
+        <section class="tag-rules-card" id="tagRulesCard" aria-labelledby="tagRulesTitle"><div class="match-card-heading"><span class="ai-card-number">03</span><div><h2 id="tagRulesTitle">AI 打标签规则</h2><p>分别定义允许输出的标签和判定依据。规则变化后，再次检查标签时会重新分析。</p></div></div><div class="tag-rules-grid"><div class="tag-rule-column"><div class="tag-rule-column-head"><h3>候选人标签</h3><button id="candidateAddCategory" type="button" class="match-outline-button">＋ 新增分类</button></div><div id="candidateCategoryEditor" class="tag-category-editor"></div><label for="candidateTagInstructions">判定规则 <span>告诉 AI 如何归类；无证据时留空</span></label><textarea id="candidateTagInstructions" class="ai-field tag-rule-instructions" maxlength="3000"></textarea></div><div class="tag-rule-column"><div class="tag-rule-column-head"><h3>JD 标签</h3><button id="jobAddCategory" type="button" class="match-outline-button">＋ 新增分类</button></div><div id="jobCategoryEditor" class="tag-category-editor"></div><label for="jobTagInstructions">判定规则 <span>说明如何从岗位要求识别方向</span></label><textarea id="jobTagInstructions" class="ai-field tag-rule-instructions" maxlength="3000"></textarea></div></div><p class="tag-rules-hint">分类名称和标签内容都可修改。JD 与候选人的同名分类会用于自动初筛；每类中满足任一标签，不同类需同时满足。</p><div class="tag-rules-actions"><span id="tagRulesStatus" role="status">标签规则仅保存在当前浏览器</span><button id="tagRulesSave" type="button" class="prompt-save">保存标签规则 ↗</button></div></section>
+      </div>
+
+      <div id="matchView" class="page-view match-view" hidden>
+        <section class="section-hero match-hero"><div class="section-kicker">AI MATCHING / JD WORKSPACE</div><h1>岗位匹配<span class="hero-blue-dot">.</span></h1><p id="matchJobLabel">选择一条 JD，先筛选，再对候选人进行 AI 评估。</p></section>
+        <div class="match-toolbar"><button id="matchChangeJob" type="button" class="match-quiet-button">← 更换 JD</button><span id="matchJobTagStatus" class="match-toolbar-status">JD 标签待检查</span><button id="matchTagJob" type="button" class="match-outline-button">AI 为此 JD 打标签</button><button id="matchTagCandidates" type="button" class="match-outline-button">检查并补齐候选人标签</button><button id="matchApplyJobTags" type="button" class="match-outline-button">按 JD 标签初筛</button><button id="matchEditTagRules" type="button" class="match-outline-button">编辑标签规则 ↗</button></div>
+        <div id="matchProgress" class="match-progress" role="status" hidden></div>
+        <details id="matchTagProgressPanel" class="match-tag-progress" hidden><summary>查看打标签进度 <span id="matchTagProgressSummary">尚未开始</span></summary><div class="match-tag-progress-body"><div class="match-tag-progress-track"><progress id="matchTagProgressBar" max="1" value="0"></progress><strong id="matchTagProgressFraction">0 / 0</strong></div><p id="matchTagProgressCurrent">等待开始</p><div class="match-tag-progress-actions"><button id="matchStopTagging" type="button" class="match-stop-button" disabled>停止打标签</button><span>停止后不再请求后续记录；已发出的服务端请求可能仍会完成。</span></div><ol id="matchTagProgressLog" aria-label="打标签记录"></ol></div></details>
+        <details id="matchEvalProgressPanel" class="match-tag-progress" hidden><summary>查看 AI 评估进度 <span id="matchEvalProgressSummary">尚未开始</span></summary><div class="match-tag-progress-body"><div class="match-tag-progress-track"><progress id="matchEvalProgressBar" max="1" value="0"></progress><strong id="matchEvalProgressFraction">0 / 0</strong></div><p id="matchEvalProgressCurrent">等待开始</p><div class="match-tag-progress-actions"><button id="matchStopEvaluation" type="button" class="match-stop-button" disabled>停止评估</button><span>停止后不再评估后续候选人；已发出的服务端请求可能仍会完成。</span></div><ol id="matchEvalProgressLog" aria-label="AI 评估记录"></ol></div></details>
+        <div class="match-workspace">
+          <aside class="match-filter-card"><div class="match-card-heading"><span class="ai-card-number">01</span><div><h2>代码初筛</h2><p>设置条件，即时从候选人库筛选。</p></div></div><label class="ai-field-label" for="matchKeyword">关键词</label><input id="matchKeyword" class="ai-field" type="search" placeholder="姓名、意向、标签…" autocomplete="off"><div id="matchFilterGroups"></div><button id="matchResetFilters" type="button" class="match-reset-button">清空条件</button><div class="match-filter-note">每类中满足任一标签；不同类别同时满足。未打标签的候选人不会命中标签条件。</div></aside>
+          <section class="match-results-card"><div class="match-results-head"><div><div class="section-kicker">CANDIDATE SHORTLIST</div><h2>初筛结果 <span id="matchCount">0</span></h2><p>勾选候选人后，按当前 JD 的三段提示词进行深度评估。</p></div><button id="matchEvaluate" class="ai-primary-button" type="button">AI 评估所选 <span id="matchSelectedCount">0</span> 人 ↗</button></div><div class="match-table-wrap"><table class="match-table"><thead><tr><th><input id="matchSelectAll" type="checkbox" aria-label="全选当前筛选结果"></th><th>候选人</th><th>AI 标签</th><th>契合程度</th><th>评估依据</th></tr></thead><tbody id="matchRows"></tbody></table></div><div class="match-results-foot">星级是 AI 辅助判断；结果仅保存在本机，当前不会推送飞书。</div></section>
+        </div>
+      </div>
+
+      <div id="dataView" class="page-view data-view" hidden>
+        <section class="section-hero"><div class="section-kicker">DATA CENTER / PROCESS INSIGHTS</div><h1>数据中心<span class="hero-blue-dot">.</span></h1><p>招聘进程中的触达、反馈与结果，将在这里汇总。</p></section>
+        <section class="data-empty-card" aria-labelledby="dataEmptyTitle"><div class="data-empty-art" aria-hidden="true"><span class="data-ring ring-a"></span><span class="data-ring ring-b"></span><span class="data-empty-icon">↗</span></div><div class="data-empty-kicker">THE SIGNALS WILL APPEAR HERE</div><h2 id="dataEmptyTitle">过程数据，正在等待接入。</h2><p>后续可在这里查看飞书机器人推荐后的触达、点击与反馈，以及候选人的筛选、面试和录用进展。</p><div class="data-empty-tags"><span>推荐触达</span><span>点击与反馈</span><span>筛选结果</span><span>面试进展</span></div></section>
+      </div>
+      <footer class="footer"><span>AR · TALENT & OPPORTUNITY</span><span>数据保存在这台电脑上 · 刷新页面以查看最新本地快照</span></footer>
+    </main>
+  </div>
+
+  <div class="drawer-backdrop" id="drawerBackdrop" hidden></div>
+  <aside class="detail-drawer" id="detailDrawer" aria-label="记录详情" aria-hidden="true" tabindex="-1"><div class="drawer-scroll"><div class="drawer-top"><span class="drawer-overline" id="drawerOverline">RECORD DETAIL</span><button class="drawer-close" type="button" id="drawerClose" aria-label="关闭详情"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5 5 19"/></svg></button></div><div id="drawerContent"></div></div></aside>
+
+  <div id="matchLaunchBackdrop" class="prompt-backdrop" hidden></div>
+  <section id="matchLaunchModal" class="match-launch-modal" role="dialog" aria-modal="true" aria-labelledby="matchLaunchTitle" hidden><div class="match-launch-inner"><div class="prompt-top"><span class="prompt-mark">✳</span><button id="matchLaunchClose" type="button" class="prompt-close" aria-label="关闭匹配窗口">×</button></div><div class="section-kicker">AI MATCHING / START HERE</div><h2 id="matchLaunchTitle">从一条 JD 开始匹配。</h2><p>确认本次使用的三段提示词，然后进入初筛与深度评估。</p><label class="ai-field-label" for="matchLaunchJob">目标岗位 JD</label><select id="matchLaunchJob" class="ai-field"></select><div class="match-launch-parts"><label for="matchLaunchGlobal"><span>01</span> 公共提示词</label><textarea id="matchLaunchGlobal" class="match-launch-editor" spellcheck="false"></textarea><label for="matchLaunchSpecific"><span>02</span> JD 专属提示词</label><textarea id="matchLaunchSpecific" class="match-launch-editor" spellcheck="false" placeholder="这条岗位特别看重的要求…"></textarea><div class="match-launch-source-title"><span>03</span> 飞书 JD 原文 <small>自动读取 · 只读</small></div><div id="matchLaunchSummary" class="match-launch-summary"></div></div><div class="match-launch-actions"><button id="matchLaunchManage" type="button" class="match-quiet-button">进入 AI 管理 ↗</button><div class="match-launch-right"><span id="matchLaunchSaveStatus" role="status"></span><button id="matchLaunchStart" type="button" class="ai-primary-button">保存并开始匹配 <span aria-hidden="true">↗</span></button></div></div></div></section>
+
+</body>
+</html>

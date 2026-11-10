@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+.env.*
+ar.json
+downloads/
+web/data.js
+web/data.js.tmp
+ai_config.json
+ai_config.json.tmp
+match_state.json
+match_state.json.tmp
