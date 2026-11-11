@@ -399,7 +399,7 @@ async function saveAiConfig() {
   const button = $("aiConfigSave");
   const model = $("aiManualModel").hidden ? $("aiModelSelect").value : $("aiManualModel").value.trim();
   const maxConcurrency = Number($("aiTagConcurrency").value);
-  if (!Number.isInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 10) { aiStatus("打标签并发数请填写 1 到 10 的整数。", true); return false; }
+  if (!Number.isInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 10) { aiStatus("AI 并发数请填写 1 到 10 的整数。", true); return false; }
   const data = { base_url: $("aiBaseUrl").value.trim(), model, api_key: $("aiApiKey").value, clear_key: $("aiClearKey").checked, max_concurrency: maxConcurrency };
   button.disabled = true;
   aiStatus("正在保存连接设置…");

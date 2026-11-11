@@ -3,7 +3,7 @@ const MATCH_DEFAULT_RULES = {
   candidate: { categories: [{ name: "专业背景", tags: ["理工", "经管", "人文社科", "其他"] }, { name: "行业与技术方向", tags: ["LLM", "Agent", "具身智能", "数据分析", "机器人", "其他"] }, { name: "岗位方向", tags: ["技术", "产品", "运营", "销售", "HR", "其他"] }], instructions: "仅依据简历和文字描述中明确的专业、项目与工作经历打标签；不要根据姓名、性别或照片推断。" },
   job: { categories: [{ name: "专业背景", tags: ["理工", "经管", "人文社科", "其他"] }, { name: "行业与技术方向", tags: ["LLM", "Agent", "具身智能", "数据分析", "机器人", "其他"] }, { name: "岗位方向", tags: ["技术", "产品", "运营", "销售", "HR", "其他"] }], instructions: "依据岗位职责、必备条件和业务方向打标签；不要把加分项当作必备条件。" }
 };
-const matchUI = { job: null, selected: new Set(), filters: {}, records: [], data: { candidate_tags: {}, job_tags: {}, evaluations: {} }, busy: false, tagStopRequested: false, tagAbortController: null, tagAbortControllers: new Set(), tagHideTimer: null, evalStopRequested: false, evalAbortController: null, evalHideTimer: null, messageTimer: null, previousFocus: null, errors: {} };
+const matchUI = { job: null, selected: new Set(), filters: {}, records: [], data: { candidate_tags: {}, job_tags: {}, evaluations: {} }, busy: false, tagStopRequested: false, tagAbortController: null, tagAbortControllers: new Set(), tagHideTimer: null, evalStopRequested: false, evalAbortControllers: new Set(), evalHideTimer: null, messageTimer: null, previousFocus: null, errors: {} };
 const LEGACY_CATEGORY_NAMES = { education: "专业背景", domain: "行业与技术方向", role: "岗位方向" };
 
 function tagRules() {
@@ -397,32 +397,42 @@ async function evaluateSelected() {
   beginEvalProgress(ids.length);
   const common = readPrompt("ar-match-global-prompt") ?? DEFAULT_GLOBAL_PROMPT;
   const specific = readPrompt(`ar-match-job-prompt:${matchUI.job.id}`) || "";
-  let completed = 0, reused = 0, failed = 0;
-  for (const [index, id] of ids.entries()) {
-    if (matchUI.evalStopRequested) break;
+  const jobId = matchUI.job.id;
+  const jdText = matchUI.job.source;
+  const concurrency = Math.max(1, Math.min(10, Number(state.aiConfig?.max_concurrency) || 3));
+  matchProgress(`正在评估 ${ids.length} 位候选人；最多并发 ${Math.min(concurrency, ids.length)} 项。`);
+  let completed = 0, reused = 0, failed = 0, done = 0;
+  await runBoundedQueue(ids, concurrency, () => matchUI.evalStopRequested, async (id) => {
     const record = candidateRecords().find((item) => item.record_id === id);
     const name = record ? candidateView(record).title : id;
-    matchProgress(`AI 正在评估 ${index + 1}/${ids.length} 位候选人…`);
-    $("matchEvalProgressCurrent").textContent = `正在评估 ${index + 1}/${ids.length}：${name}`;
+    const controller = new AbortController();
+    matchUI.evalAbortControllers.add(controller);
+    $("matchEvalProgressCurrent").textContent = `正在并发评估：${name} · 已完成 ${done}/${ids.length}`;
+    let message = "";
     try {
-      matchUI.evalAbortController = new AbortController();
-      const result = await matchRequest("/api/match-evaluate", { job_id: matchUI.job.id, jd_text: matchUI.job.source, candidate_id: id, common_prompt: common, job_prompt: specific }, matchUI.evalAbortController.signal);
-      matchUI.data.evaluations[`${matchUI.job.id}|${id}`] = result;
+      const result = await matchRequest("/api/match-evaluate", { job_id: jobId, jd_text: jdText, candidate_id: id, common_prompt: common, job_prompt: specific }, controller.signal);
+      matchUI.data.evaluations[`${jobId}|${id}`] = result;
       delete matchUI.errors[id];
       result.cached ? reused++ : completed++;
       matchUI.selected.delete(id);
-      updateEvalProgress(index + 1, ids.length, `${name} · ${result.cached ? "复用已有评分" : `${result.stars} 星，评估完成`}`);
+      message = `${name} · ${result.cached ? "复用已有评分" : `${result.stars} 星，评估完成`}`;
     } catch (error) {
-      if (matchUI.evalStopRequested && error.name === "AbortError") break;
-      matchUI.errors[id] = `评估失败：${error.message}`;
-      failed++;
-      updateEvalProgress(index + 1, ids.length, `${name} · 失败：${error.message}`);
-    } finally { matchUI.evalAbortController = null; }
-    renderMatch();
-  }
+      if (!(matchUI.evalStopRequested && error.name === "AbortError")) {
+        matchUI.errors[id] = `评估失败：${error.message}`;
+        failed++;
+        message = `${name} · 失败：${error.message}`;
+      }
+    } finally {
+      matchUI.evalAbortControllers.delete(controller);
+      if (message) {
+        done++;
+        updateEvalProgress(done, ids.length, message);
+        renderMatch();
+      }
+    }
+  });
   matchUI.busy = false;
   renderMatch();
-  const done = Number($("matchEvalProgressBar").value);
   endEvalProgress(matchUI.evalStopRequested ? `已停止 · ${done}/${ids.length}` : `已完成 · ${done}/${ids.length}`);
   matchProgress(`${matchUI.evalStopRequested ? "已停止" : "评估完成"}：新分析 ${completed} 人，复用结果 ${reused} 人，失败 ${failed} 人。${matchUI.selected.size ? `仍有 ${matchUI.selected.size} 人可继续评估。` : ""}`, failed > 0);
 }
@@ -466,7 +476,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("matchRows").addEventListener("change", (event) => { const input = event.target.closest("[data-match-select]"); if (!input) return; input.checked ? matchUI.selected.add(input.dataset.matchSelect) : matchUI.selected.delete(input.dataset.matchSelect); renderMatch(); });
   $("matchRows").addEventListener("click", (event) => { const button = event.target.closest("[data-match-detail]"); if (!button) return; const record = candidateRecords().find((item) => item.record_id === button.dataset.matchDetail); if (record) showDetail(record, "candidate"); });
   $("matchEvaluate").addEventListener("click", evaluateSelected);
-  $("matchStopEvaluation").addEventListener("click", () => { matchUI.evalStopRequested = true; matchUI.evalAbortController?.abort(); $("matchStopEvaluation").disabled = true; $("matchEvalProgressPanel").hidden = true; matchProgress("已停止 AI 评估；未完成的候选人仍保持选中。已发出的服务端请求可能仍会完成。", false); });
+  $("matchStopEvaluation").addEventListener("click", () => { matchUI.evalStopRequested = true; for (const controller of matchUI.evalAbortControllers) controller.abort(); $("matchStopEvaluation").disabled = true; $("matchEvalProgressPanel").hidden = true; matchProgress("已停止 AI 评估；未完成的候选人仍保持选中。已发出的服务端请求可能仍会完成。", false); });
   document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$("matchLaunchModal").hidden) closeLaunch(); });
   loadMatchState();
 });
