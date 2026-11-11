@@ -51,10 +51,14 @@ def read_settings() -> dict:
     models = data.get("models", [])
     if not isinstance(models, list):
         models = []
+    max_concurrency = data.get("max_concurrency", 3)
+    if type(max_concurrency) is not int or not 1 <= max_concurrency <= 10:
+        max_concurrency = 3
     return {
         "base_url": data.get("base_url", ""),
         "model": data.get("model", ""),
         "models": [item for item in models if isinstance(item, str)][:500],
+        "max_concurrency": max_concurrency,
         "has_key": bool(_get_key()),
     }
 
@@ -76,6 +80,9 @@ def save_settings(payload: dict) -> dict:
     if api_key and clear_key:
         raise ValueError("不能同时设置和清除 API Key")
     previous = read_settings()
+    max_concurrency = payload.get("max_concurrency", previous["max_concurrency"])
+    if type(max_concurrency) is not int or not 1 <= max_concurrency <= 10:
+        raise ValueError("打标签并发数必须是 1 到 10 的整数")
     models = previous["models"] if base_url == previous["base_url"] else []
     if model and model not in models:
         models.append(model)
@@ -83,7 +90,7 @@ def save_settings(payload: dict) -> dict:
         _keyring().set_password(SERVICE, ACCOUNT, api_key)
     elif clear_key and previous["has_key"]:
         _keyring().delete_password(SERVICE, ACCOUNT)
-    data = {"base_url": base_url, "model": model, "models": models[:500]}
+    data = {"base_url": base_url, "model": model, "models": models[:500], "max_concurrency": max_concurrency}
     temporary = CONFIG.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, CONFIG)

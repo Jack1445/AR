@@ -40,6 +40,17 @@ class AISettingsTests(unittest.TestCase):
             with self.subTest(url=url), self.assertRaises(ValueError):
                 ai_settings._valid_base_url(url)
 
+    def test_tag_concurrency_is_bounded_and_persisted(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as folder:
+            with patch.object(ai_settings, "CONFIG", Path(folder) / "ai_config.json"), patch.object(ai_settings, "_keyring", return_value=FakeKeyring()):
+                self.assertEqual(ai_settings.read_settings()["max_concurrency"], 3)
+                saved = ai_settings.save_settings({"base_url": "https://example.com/v1", "model": "sample-model", "max_concurrency": 4})
+                self.assertEqual(saved["max_concurrency"], 4)
+                self.assertEqual(json.loads(ai_settings.CONFIG.read_text(encoding="utf-8"))["max_concurrency"], 4)
+                for invalid in (0, 11, 2.5, True, "3"):
+                    with self.subTest(value=invalid), self.assertRaises(ValueError):
+                        ai_settings.save_settings({"base_url": "https://example.com/v1", "model": "sample-model", "max_concurrency": invalid})
+
 
 if __name__ == "__main__":
     unittest.main()

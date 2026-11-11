@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -42,6 +43,15 @@ class MatchingTests(unittest.TestCase):
             with patch.object(match_engine, "STATE_FILE", Path(folder) / "state.json"), patch.object(match_engine, "candidate_profile", return_value="英语工作语言"), patch.object(match_engine, "_ai_json", return_value={"tags": {"语言能力": ["英语", "法语"]}, "summary": "明确提到英语"}):
                 result = match_engine.tag_item({"kind": "candidate", "id": "rec1", "rules": custom})
                 self.assertEqual(result["tags"], {"语言能力": ["英语"]})
+
+    def test_parallel_tags_keep_each_candidate_result(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as folder:
+            with patch.object(match_engine, "STATE_FILE", Path(folder) / "state.json"), patch.object(match_engine, "candidate_profile", side_effect=lambda item_id: f"资料 {item_id}"), patch.object(match_engine, "_ai_json", return_value={"tags": {"专业背景": ["理工"]}, "summary": "有证据"}):
+                payloads = [{"kind": "candidate", "id": f"rec{i}", "rules": RULES} for i in range(8)]
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    results = list(pool.map(match_engine.tag_item, payloads))
+                self.assertEqual(len(results), 8)
+                self.assertEqual(len(match_engine.public_state()["candidate_tags"]), 8)
 
     def test_tag_plan_skips_unchanged_records_and_selects_changed_rules(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as folder:

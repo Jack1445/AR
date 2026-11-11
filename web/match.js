@@ -3,7 +3,7 @@ const MATCH_DEFAULT_RULES = {
   candidate: { categories: [{ name: "专业背景", tags: ["理工", "经管", "人文社科", "其他"] }, { name: "行业与技术方向", tags: ["LLM", "Agent", "具身智能", "数据分析", "机器人", "其他"] }, { name: "岗位方向", tags: ["技术", "产品", "运营", "销售", "HR", "其他"] }], instructions: "仅依据简历和文字描述中明确的专业、项目与工作经历打标签；不要根据姓名、性别或照片推断。" },
   job: { categories: [{ name: "专业背景", tags: ["理工", "经管", "人文社科", "其他"] }, { name: "行业与技术方向", tags: ["LLM", "Agent", "具身智能", "数据分析", "机器人", "其他"] }, { name: "岗位方向", tags: ["技术", "产品", "运营", "销售", "HR", "其他"] }], instructions: "依据岗位职责、必备条件和业务方向打标签；不要把加分项当作必备条件。" }
 };
-const matchUI = { job: null, selected: new Set(), filters: {}, records: [], data: { candidate_tags: {}, job_tags: {}, evaluations: {} }, busy: false, tagStopRequested: false, tagAbortController: null, tagHideTimer: null, evalStopRequested: false, evalAbortController: null, evalHideTimer: null, messageTimer: null, previousFocus: null, errors: {} };
+const matchUI = { job: null, selected: new Set(), filters: {}, records: [], data: { candidate_tags: {}, job_tags: {}, evaluations: {} }, busy: false, tagStopRequested: false, tagAbortController: null, tagAbortControllers: new Set(), tagHideTimer: null, evalStopRequested: false, evalAbortController: null, evalHideTimer: null, messageTimer: null, previousFocus: null, errors: {} };
 const LEGACY_CATEGORY_NAMES = { education: "专业背景", domain: "行业与技术方向", role: "岗位方向" };
 
 function tagRules() {
@@ -145,6 +145,17 @@ async function matchRequest(path, payload, signal) {
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
   return result;
+}
+async function runBoundedQueue(items, limit, shouldStop, processItem) {
+  let nextIndex = 0;
+  async function worker() {
+    while (!shouldStop()) {
+      const index = nextIndex++;
+      if (index >= items.length) return;
+      await processItem(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(items.length, limit) }, worker));
 }
 async function loadMatchState() {
   try {
@@ -329,6 +340,7 @@ async function tagCandidates() {
     if (!pending.length) {
       clearTimeout(matchUI.tagHideTimer);
       $("matchTagProgressPanel").hidden = true;
+      await loadMatchState();
       matchProgress(`已跳过 ${skipped} 位资料和规则均未变化的候选人，无需重新打标签。`);
       return;
     }
@@ -339,32 +351,43 @@ async function tagCandidates() {
     if (!pending.length) { matchUI.busy = false; $("matchTagCandidates").disabled = false; }
   }
   beginTagProgress("候选人标签", pending.length);
-  matchProgress(`发现 ${pending.length} 位需要打标签；已跳过 ${skipped} 位未变化的候选人。`);
-  let changed = 0, failed = 0;
-  for (const [index, record] of pending.entries()) {
-    if (matchUI.tagStopRequested) break;
+  const concurrency = Math.max(1, Math.min(10, Number(state.aiConfig?.max_concurrency) || 3));
+  matchProgress(`发现 ${pending.length} 位需要打标签；并发 ${Math.min(concurrency, pending.length)} 项，跳过 ${skipped} 位未变化的候选人。`);
+  let changed = 0, failed = 0, done = 0, fatalError = "";
+  await runBoundedQueue(pending, concurrency, () => matchUI.tagStopRequested, async (record) => {
     const name = candidateView(record).title;
-    matchProgress(`正在为待处理候选人打标签 ${index + 1}/${pending.length}…`);
-    $("matchTagProgressCurrent").textContent = `正在处理 ${index + 1}/${pending.length}：${name}`;
+    const controller = new AbortController();
+    matchUI.tagAbortControllers.add(controller);
+    $("matchTagProgressCurrent").textContent = `正在并发处理：${name} · 已完成 ${done}/${pending.length}`;
+    let message = "";
     try {
-      matchUI.tagAbortController = new AbortController();
-      const result = await matchRequest("/api/match-tag", { kind: "candidate", id: record.record_id, rules }, matchUI.tagAbortController.signal);
+      const result = await matchRequest("/api/match-tag", { kind: "candidate", id: record.record_id, rules }, controller.signal);
       matchUI.data.candidate_tags[record.record_id] = result;
       if (!result.cached) changed++;
-      updateTagProgress(index + 1, pending.length, `${name} · ${result.cached ? "复用现有标签" : "已生成新标签"}`);
-      renderMatch();
+      message = `${name} · ${result.cached ? "复用现有标签" : "已生成新标签"}`;
     } catch (error) {
-      if (matchUI.tagStopRequested && error.name === "AbortError") break;
-      failed++;
-      updateTagProgress(index + 1, pending.length, `${name} · 失败：${error.message}`);
-    } finally { matchUI.tagAbortController = null; }
-  }
+      if (!(matchUI.tagStopRequested && error.name === "AbortError")) {
+        failed++;
+        message = `${name} · 失败：${error.message}`;
+        if (!matchUI.tagStopRequested && /AI 服务返回 HTTP (401|403|429)\b|无法连接 AI 服务|AI 未返回约定的 JSON 格式/.test(error.message)) {
+          fatalError = error.message;
+          matchUI.tagStopRequested = true;
+        }
+      }
+    } finally {
+      matchUI.tagAbortControllers.delete(controller);
+      if (message) {
+        done++;
+        updateTagProgress(done, pending.length, message);
+        renderMatch();
+      }
+    }
+  });
   matchUI.busy = false;
   $("matchTagCandidates").disabled = false;
-  const done = Number($("matchTagProgressBar").value);
-  const summary = matchUI.tagStopRequested ? `已停止 · ${done}/${pending.length}` : `已完成 · ${done}/${pending.length}`;
+  const summary = fatalError ? `服务错误，已停止 · ${done}/${pending.length}` : matchUI.tagStopRequested ? `已停止 · ${done}/${pending.length}` : `已完成 · ${done}/${pending.length}`;
   endTagProgress(summary);
-  matchProgress(`${matchUI.tagStopRequested ? "已停止" : "标签检查完成"}：新生成 ${changed} 份，失败 ${failed} 份，跳过未变化 ${skipped} 份。`, failed > 0);
+  matchProgress(fatalError ? `打标签因 ${fatalError} 而停止；其余未发送的记录可稍后重试。` : `${matchUI.tagStopRequested ? "已停止" : "标签检查完成"}：新生成 ${changed} 份，失败 ${failed} 份，跳过未变化 ${skipped} 份。`, failed > 0);
 }
 async function evaluateSelected() {
   if (matchUI.busy || !matchUI.job || !matchUI.selected.size) return;
@@ -433,7 +456,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("matchChangeJob").addEventListener("click", openLaunch);
   $("matchTagJob").addEventListener("click", tagJob);
   $("matchTagCandidates").addEventListener("click", tagCandidates);
-  $("matchStopTagging").addEventListener("click", () => { matchUI.tagStopRequested = true; matchUI.tagAbortController?.abort(); $("matchStopTagging").disabled = true; $("matchTagProgressPanel").hidden = true; matchProgress("已停止打标签；后续记录不会继续处理。已发出的服务端请求可能仍会完成。", false); });
+  $("matchStopTagging").addEventListener("click", () => { matchUI.tagStopRequested = true; matchUI.tagAbortController?.abort(); for (const controller of matchUI.tagAbortControllers) controller.abort(); $("matchStopTagging").disabled = true; $("matchTagProgressPanel").hidden = true; matchProgress("已停止打标签；后续记录不会继续处理。已发出的服务端请求可能仍会完成。", false); });
   $("matchEditTagRules").addEventListener("click", () => { showView("ai", "navAI", "tagRulesCard"); $("candidateCategoryEditor").querySelector(".tag-category-name")?.focus({ preventScroll: true }); });
   $("matchApplyJobTags").addEventListener("click", applyJobFilters);
   $("matchKeyword").addEventListener("input", renderMatch);
