@@ -363,10 +363,19 @@ function fillModelSelect(config) {
   select.replaceChildren(new Option("请选择模型", ""), ...models.map((id) => new Option(id, id)));
   select.value = config.model || "";
 }
+const TAG_CONCURRENCY_KEY = "ar-tag-concurrency";
+function effectiveTagConcurrency(config) {
+  try {
+    const saved = Number(localStorage.getItem(TAG_CONCURRENCY_KEY));
+    if (Number.isInteger(saved) && saved >= 1 && saved <= 10) return saved;
+  } catch { /* Use the server setting. */ }
+  const serverValue = config.max_concurrency;
+  return Number.isInteger(serverValue) && serverValue >= 1 && serverValue <= 10 ? serverValue : 3;
+}
 function showAiConfig(config) {
-  state.aiConfig = config;
+  state.aiConfig = { ...config, max_concurrency: effectiveTagConcurrency(config) };
   $("aiBaseUrl").value = config.base_url || "";
-  $("aiTagConcurrency").value = config.max_concurrency ?? 3;
+  $("aiTagConcurrency").value = state.aiConfig.max_concurrency;
   $("aiApiKey").value = "";
   $("aiClearKey").checked = false;
   $("aiKeyState").textContent = config.has_key ? "已保存在本机" : "未配置";
@@ -398,8 +407,12 @@ async function saveAiConfig() {
     const response = await fetch("/api/ai-config", { method: "POST", headers: { "Content-Type": "application/json", "X-AR-Config": "1" }, body: JSON.stringify(data) });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    let savedLocally = true;
+    try { localStorage.setItem(TAG_CONCURRENCY_KEY, String(maxConcurrency)); }
+    catch { savedLocally = false; }
     showAiConfig(result);
-    aiStatus("连接设置已保存；尚未发起 AI 分析。");
+    if (result.max_concurrency == null) aiStatus(savedLocally ? "并发数已保存在当前浏览器；本地服务仍是旧版本，请重启服务以应用全部更新。" : "本地服务仍是旧版本，且浏览器未能保存并发数；请重启本地服务。", true);
+    else aiStatus(savedLocally ? "连接设置已保存；尚未发起 AI 分析。" : "连接设置已保存；浏览器无法保存并发数，请检查浏览器存储设置。", !savedLocally);
     return true;
   } catch (error) {
     aiStatus(`保存失败：${error.message}`, true);
