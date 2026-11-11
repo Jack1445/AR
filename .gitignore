@@ -3,6 +3,7 @@ __pycache__/
 .env
 .env.*
 setup-feishu-credentials.ps1
+.venv/
 ar.json
 downloads/
 web/data.js
