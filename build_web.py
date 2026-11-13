@@ -23,7 +23,7 @@ def configured_tables() -> list[dict]:
         raise ValueError("ar.json 的 tables 必须是列表")
     result = []
     for table in tables:
-        if not isinstance(table, dict) or not all(isinstance(table.get(key), str) and table[key] for key in ("id", "name", "kind")) or table["kind"] not in {"candidate", "job"} or not isinstance(table.get("archived"), bool):
+        if not isinstance(table, dict) or not all(isinstance(table.get(key), str) and table[key] for key in ("id", "name", "kind")) or table["kind"] not in {"candidate", "job", "alumni_output", "candidate_output", "resume_flow"} or not isinstance(table.get("archived"), bool):
             raise ValueError("ar.json 的数据表配置无效")
         result.append({key: table[key] for key in ("id", "name", "kind", "archived")})
     return result

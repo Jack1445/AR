@@ -268,7 +268,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"目标数据表可读取；字段和记录接口已验证（返回 {len(fields.get('items') or [])} 个字段、{len(records.get('items') or [])} 条记录）。")
         elif args.command == "pull":
             if args.all_tables:
-                table_ids = [item["table_id"] for item in client.pages(f"/bitable/v1/apps/{app_token}/tables")]
+                table_ids = [item["id"] for item in config.get("tables", [])] or [item["table_id"] for item in client.pages(f"/bitable/v1/apps/{app_token}/tables")]
             elif table_id:
                 table_ids = [table_id]
             else:

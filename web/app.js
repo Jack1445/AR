@@ -135,13 +135,24 @@ function closeDetail() {
 function updateSummary() {
   const current = table("candidate", false), archive = table("candidate", true), jobs = table("job", false);
   const count = (item) => item?.records.length || 0;
+  const archiveTab = document.querySelector('[data-candidate-tab="archive"]');
+  archiveTab.hidden = !archive;
+  if (!archive && state.candidateTab === "archive") {
+    state.candidateTab = "current";
+    archiveTab.classList.remove("active");
+    archiveTab.setAttribute("aria-pressed", "false");
+    document.querySelector('[data-candidate-tab="current"]').classList.add("active");
+    document.querySelector('[data-candidate-tab="current"]').setAttribute("aria-pressed", "true");
+  }
   $("metricCandidates").textContent = count(current);
-  $("metricArchive").textContent = count(archive);
+  $("metricArchive").textContent = archive ? count(archive) : state.tables.length;
+  $("metricThirdLabel").textContent = archive ? "历史存档" : "已接入数据表";
+  $("metricThirdFoot").textContent = archive ? "旧版候选人表" : "含输出表与流转简历";
   $("metricJobs").textContent = count(jobs);
   $("candidateHeadingCount").textContent = state.candidateTab === "archive" ? count(archive) : count(current);
   $("jobHeadingCount").textContent = count(jobs);
   const available = state.tables.filter((item) => item.available);
-  $("syncState").textContent = available.length === state.tables.length ? "已同步" : `已同步 ${available.length}/3`;
+  $("syncState").textContent = available.length === state.tables.length ? "已同步" : `已同步 ${available.length}/${state.tables.length}`;
   const newest = Math.max(...available.map((item) => new Date(item.synced_at).getTime()), 0);
   $("syncTime").textContent = newest ? `最近读取 ${new Date(newest).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}` : "尚无本地数据";
   const missing = state.tables.filter((item) => !item.available).map((item) => item.name);

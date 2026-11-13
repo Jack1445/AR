@@ -66,7 +66,7 @@ try {
         $baseUrl = (Read-Host '首次使用：请粘贴目标飞书多维表格链接').Trim()
         if (-not $baseUrl) { throw '没有提供飞书多维表格链接。' }
     }
-    Write-Host '正在识别并验证三张飞书数据表...'
+    Write-Host '正在识别并验证目标飞书数据表...'
     $configArgs = @((Join-Path $project 'setup_config.py'))
     if ($baseUrl) { $configArgs += @('--base-url', $baseUrl) }
     Run-Python $venvPython $configArgs

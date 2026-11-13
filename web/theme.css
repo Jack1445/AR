@@ -158,6 +158,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline-color: #1f4
 .segment { color: #8490a0; border-radius: 5px; }
 .segment { font-size: 11px; }
 .segment.active { color: #1f4d91; box-shadow: 0 1px 4px #182f551a; }
+[data-candidate-tab="archive"][hidden] { display: none !important; }
 .job-filter-label { color: #536d94; }
 .filter-line { background: #1f4d91; }
 .search-box { border-color: #e3e8ee; border-radius: 7px; color: #95a1b0; }

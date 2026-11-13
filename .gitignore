@@ -5,6 +5,7 @@ __pycache__/
 setup-feishu-credentials.ps1
 .venv/
 ar.json
+ar.json.bak
 downloads/
 web/data.js
 web/data.js.tmp
