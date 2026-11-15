@@ -11,5 +11,9 @@ web/data.js
 web/data.js.tmp
 ai_config.json
 ai_config.json.tmp
+candidate_ai_config.json
+candidate_ai_config.json.tmp
 match_state.json
 match_state.json.tmp
+ai_history.sqlite3*
+recommendations.sqlite3*

@@ -22,6 +22,34 @@ class FakeKeyring:
 
 
 class AISettingsTests(unittest.TestCase):
+    def test_connection_uses_current_form_values_without_saving(self):
+        requests = []
+
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *_args): return None
+            def read(self, _size): return b'{"choices":[{"message":{"content":"ok"}}]}'
+
+        class Opener:
+            def open(self, request, timeout):
+                requests.append((request, timeout))
+                return Response()
+
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as folder:
+            config = Path(folder) / "ai_config.json"
+            keyring = FakeKeyring()
+            with patch.object(ai_settings, "CONFIG", config), patch.object(ai_settings, "_keyring", return_value=keyring), patch.object(ai_settings.urllib.request, "build_opener", return_value=Opener()):
+                result = ai_settings.test_connection({"base_url": "https://example.com/v1", "model": "draft-model", "api_key": "draft-key"})
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["model"], "draft-model")
+            self.assertFalse(config.exists())
+            self.assertFalse(keyring.values)
+            request, timeout = requests[0]
+            self.assertEqual(request.full_url, "https://example.com/v1/chat/completions")
+            self.assertEqual(request.get_header("Authorization"), "Bearer draft-key")
+            self.assertEqual(json.loads(request.data)["model"], "draft-model")
+            self.assertEqual(timeout, 30)
+
     def test_api_key_is_saved_only_in_keyring(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as folder:
             keyring = FakeKeyring()

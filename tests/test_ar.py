@@ -37,6 +37,12 @@ class ArTests(unittest.TestCase):
             self.assertEqual((folder / "attachments" / "file1_notes.pdf").read_bytes(), b"file content")
             self.assertEqual(len(json.loads((folder / "attachments.json").read_text(encoding="utf-8"))), 1)
 
+    def test_cli_refuses_to_write_source_table(self):
+        with tempfile.TemporaryDirectory(dir=ar.ROOT) as directory:
+            config = Path(directory) / "ar.json"
+            config.write_text(json.dumps({"base_url": "https://example.feishu.cn/base/exampleAppToken?table=sourceTable", "tables": [{"kind": "candidate", "id": "sourceTable"}, {"kind": "candidate_output", "id": "outputTable"}]}), encoding="utf-8")
+            self.assertEqual(ar.main(["--config", str(config), "create", "{}"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

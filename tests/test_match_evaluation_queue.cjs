@@ -34,7 +34,7 @@ async function main() {
   assert.equal(peak, 3);
   assert.deepEqual(started.sort(), ["a", "b", "c", "d", "e"]);
   assert.equal(progress.value, 5);
-  assert.equal(vm.runInContext("matchUI.selected.size", context), 0);
+  assert.equal(vm.runInContext("matchUI.selected.size", context), 5);
 
   vm.runInContext('matchUI.selected = new Set(["a", "b", "c", "d", "e"]);', context);
   started.length = 0;

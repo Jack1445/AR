@@ -55,9 +55,10 @@ class MatchingTests(unittest.TestCase):
 
     def test_tag_plan_skips_unchanged_records_and_selects_changed_rules(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as folder:
-            records = [{"record_id": "rec1"}, {"record_id": "rec2"}]
+            records = [{"record_id": "rec1", "fields": {"AR_记录类型": "account", "简历": [{"file_token": "one"}]}}, {"record_id": "rec2", "fields": {"AR_记录类型": "account", "简历": [{"file_token": "two"}]}}, {"record_id": "legacy", "fields": {"简历": [{"file_token": "old"}]}}]
             original_read_json = match_engine.read_json
-            with patch.object(match_engine, "STATE_FILE", Path(folder) / "state.json"), patch.object(match_engine, "TABLES", TEST_TABLES), patch.object(match_engine, "read_json", side_effect=lambda path, default: records if str(path).endswith("records.json") else original_read_json(path, default)), patch.object(match_engine, "candidate_profile", side_effect=lambda item_id: "已有资料" if item_id == "rec1" else "新资料"), patch.object(match_engine, "_ai_json", return_value={"tags": {"专业背景": ["理工"], "行业与技术": [], "岗位方向": []}, "summary": "测试"}):
+            ar_tables = [*TEST_TABLES, {"id": "testArCandidateTable", "name": "AR 候选人", "kind": "candidate_output", "archived": False}]
+            with patch.object(match_engine, "STATE_FILE", Path(folder) / "state.json"), patch.object(match_engine, "TABLES", ar_tables), patch.object(match_engine, "read_json", side_effect=lambda path, default: records if Path(path).parent.name == "testArCandidateTable" else ([{"record_id": "legacy", "fields": {"简历": [{"file_token": "old"}]}}] if str(path).endswith("records.json") else original_read_json(path, default))), patch.object(match_engine, "candidate_profile", side_effect=lambda item_id: "已有资料" if item_id == "rec1" else "新资料"), patch.object(match_engine, "_ai_json", return_value={"tags": {"专业背景": ["理工"] , "行业与技术": [], "岗位方向": []}, "summary": "测试"}):
                 match_engine.tag_item({"kind": "candidate", "id": "rec1", "rules": RULES})
                 plan = match_engine.tag_plan({"kind": "candidate", "rules": RULES})
                 self.assertEqual(plan["cached_count"], 1)
@@ -67,7 +68,7 @@ class MatchingTests(unittest.TestCase):
 
     def test_evaluation_is_saved_per_candidate_and_jd(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as folder:
-            with patch.object(match_engine, "STATE_FILE", Path(folder) / "state.json"), patch.object(match_engine, "candidate_profile", return_value="候选人资料"), patch.object(match_engine, "_job_text", return_value="岗位原文"), patch.object(match_engine, "read_settings", return_value={"model": "mock-model", "base_url": "https://example.com/v1"}), patch.object(match_engine, "_ai_json", return_value={"stars": 4, "reason": "具有相关经历"}) as ai:
+            with patch.object(match_engine, "STATE_FILE", Path(folder) / "state.json"), patch.object(match_engine, "candidate_profile", return_value="候选人资料"), patch.object(match_engine, "_job_text", return_value="岗位原文"), patch.object(match_engine, "read_settings", return_value={"model": "mock-model", "base_url": "https://example.com/v1"}), patch.object(match_engine, "_ai_json", return_value={"stars": 4, "reason": "具有相关经历"}) as ai, patch("portal_data.publish_recommendation", return_value={"published": True, "record_id": "local_test"}) as publish:
                 payload = {"job_id": "jd1", "jd_text": "岗位原文", "candidate_id": "rec1", "common_prompt": "公共规则", "job_prompt": "岗位规则"}
                 first = match_engine.evaluate_item(payload)
                 second = match_engine.evaluate_item(payload)
@@ -76,6 +77,19 @@ class MatchingTests(unittest.TestCase):
                 self.assertTrue(second["cached"])
                 self.assertFalse(changed["cached"])
                 self.assertEqual(ai.call_count, 2)
+                publish.assert_not_called()
+                self.assertNotIn("delivery", first)
+                self.assertEqual(match_engine.confirm_recommendation(payload)["record_id"], "local_test")
+                publish.assert_called_once_with("jd1", "rec1", 4, "具有相关经历", "岗位原文")
+
+    def test_low_star_evaluation_can_be_manually_confirmed(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as folder:
+            with patch.object(match_engine, "STATE_FILE", Path(folder) / "state.json"), patch.object(match_engine, "candidate_profile", return_value="候选人资料"), patch.object(match_engine, "_job_text", return_value="岗位原文"), patch.object(match_engine, "read_settings", return_value={"model": "mock-model", "base_url": "https://example.com/v1"}), patch.object(match_engine, "_ai_json", return_value={"stars": 1, "reason": "信息不足"}), patch("portal_data.publish_recommendation", return_value={"published": True}) as publish:
+                payload = {"job_id": "jd1", "jd_text": "岗位原文", "candidate_id": "rec1", "common_prompt": "", "job_prompt": ""}
+                match_engine.evaluate_item(payload)
+                publish.assert_not_called()
+                self.assertTrue(match_engine.confirm_recommendation(payload)["published"])
+                publish.assert_called_once_with("jd1", "rec1", 1, "信息不足", "岗位原文")
 
 
 if __name__ == "__main__":

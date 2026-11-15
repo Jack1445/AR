@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -100,6 +101,46 @@ def save_settings(payload: dict) -> dict:
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, msg, headers, newurl):
         return None
+
+
+def test_connection(payload: dict) -> dict:
+    """Probe the selected chat model without saving settings or sending candidate data."""
+    if not isinstance(payload, dict):
+        raise ValueError("测试设置格式无效")
+    base_url = _valid_base_url(str(payload.get("base_url", "")))
+    model = str(payload.get("model", "")).strip()
+    api_key = payload.get("api_key", "")
+    if not base_url or not model:
+        raise ValueError("请先填写 API 基础地址并选择模型")
+    if len(model) > 200 or not isinstance(api_key, str) or len(api_key) > 4096:
+        raise ValueError("模型 ID 或 API Key 格式无效")
+    if payload.get("clear_key"):
+        raise ValueError("已勾选清除 API Key，请先取消后再测试连接")
+    key = api_key.strip() or _get_key()
+    if not key and urlsplit(base_url).hostname not in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError("请填写 API Key，或先保存密钥")
+    body = json.dumps({"model": model, "messages": [{"role": "user", "content": "请简短回复：连接成功"}], "max_tokens": 32}, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    request = urllib.request.Request(base_url + "/chat/completions", data=body, headers=headers, method="POST")
+    started = time.monotonic()
+    try:
+        with urllib.request.build_opener(_NoRedirect).open(request, timeout=30) as response:
+            raw = response.read(128 * 1024 + 1)
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(f"模型连接失败（HTTP {error.code}），请检查 API Key、模型 ID 和服务权限") from None
+    except (urllib.error.URLError, TimeoutError):
+        raise RuntimeError("无法连接 AI 服务，请检查网络和 API 基础地址") from None
+    if len(raw) > 128 * 1024:
+        raise RuntimeError("模型响应过大")
+    try:
+        result = json.loads(raw)
+        if not isinstance(result["choices"], list) or not result["choices"]:
+            raise ValueError
+    except (ValueError, KeyError, TypeError):
+        raise RuntimeError("AI 服务已响应，但未返回有效的对话结果") from None
+    return {"ok": True, "model": model, "elapsed_seconds": round(time.monotonic() - started, 1)}
 
 
 def fetch_models() -> dict:

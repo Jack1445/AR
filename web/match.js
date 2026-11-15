@@ -3,7 +3,7 @@ const MATCH_DEFAULT_RULES = {
   candidate: { categories: [{ name: "专业背景", tags: ["理工", "经管", "人文社科", "其他"] }, { name: "行业与技术方向", tags: ["LLM", "Agent", "具身智能", "数据分析", "机器人", "其他"] }, { name: "岗位方向", tags: ["技术", "产品", "运营", "销售", "HR", "其他"] }], instructions: "仅依据简历和文字描述中明确的专业、项目与工作经历打标签；不要根据姓名、性别或照片推断。" },
   job: { categories: [{ name: "专业背景", tags: ["理工", "经管", "人文社科", "其他"] }, { name: "行业与技术方向", tags: ["LLM", "Agent", "具身智能", "数据分析", "机器人", "其他"] }, { name: "岗位方向", tags: ["技术", "产品", "运营", "销售", "HR", "其他"] }], instructions: "依据岗位职责、必备条件和业务方向打标签；不要把加分项当作必备条件。" }
 };
-const matchUI = { job: null, selected: new Set(), filters: {}, records: [], data: { candidate_tags: {}, job_tags: {}, evaluations: {} }, busy: false, tagStopRequested: false, tagAbortController: null, tagAbortControllers: new Set(), tagHideTimer: null, evalStopRequested: false, evalAbortControllers: new Set(), evalHideTimer: null, messageTimer: null, previousFocus: null, errors: {} };
+const matchUI = { job: null, selected: new Set(), filters: {}, records: [], recommendations: [], confirming: new Set(), data: { candidate_tags: {}, job_tags: {}, evaluations: {} }, busy: false, tagStopRequested: false, tagAbortController: null, tagAbortControllers: new Set(), tagHideTimer: null, evalStopRequested: false, evalAbortControllers: new Set(), evalHideTimer: null, messageTimer: null, previousFocus: null, errors: {} };
 const LEGACY_CATEGORY_NAMES = { education: "专业背景", domain: "行业与技术方向", role: "岗位方向" };
 
 function tagRules() {
@@ -71,13 +71,13 @@ function saveTagRules() {
   try { localStorage.setItem("ar-tag-rules", JSON.stringify(rules)); $("tagRulesStatus").textContent = "标签规则已保存；规则变化后，下次打标签会重新分析。"; renderFilters(); }
   catch { $("tagRulesStatus").textContent = "无法保存标签规则，请检查浏览器存储设置。"; }
 }
-function matchProgress(message, error = false) {
+function matchProgress(message, error = false, sticky = false) {
   const target = $("matchProgress");
   clearTimeout(matchUI.messageTimer);
   target.textContent = message;
   target.classList.toggle("error", error);
   target.hidden = !message;
-  if (message) matchUI.messageTimer = setTimeout(() => { target.hidden = true; }, 5000);
+  if (message && !sticky) matchUI.messageTimer = setTimeout(() => { target.hidden = true; }, 5000);
 }
 function beginTagProgress(label, total) {
   matchUI.tagStopRequested = false;
@@ -102,11 +102,12 @@ function updateTagProgress(done, total, message) {
   item.textContent = message;
   $("matchTagProgressLog").prepend(item);
 }
-function endTagProgress(summary) {
+function endTagProgress(summary, error = false) {
   $("matchTagProgressSummary").textContent = summary;
   $("matchTagProgressCurrent").textContent = summary;
   $("matchStopTagging").disabled = true;
   $("matchChangeJob").disabled = false;
+  if (error) return;
   if (matchUI.tagStopRequested) $("matchTagProgressPanel").hidden = true;
   else matchUI.tagHideTimer = setTimeout(() => { $("matchTagProgressPanel").hidden = true; }, 10000);
 }
@@ -141,10 +142,30 @@ function endEvalProgress(summary) {
   else matchUI.evalHideTimer = setTimeout(() => { $("matchEvalProgressPanel").hidden = true; }, 10000);
 }
 async function matchRequest(path, payload, signal) {
-  const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-AR-Match": "1" }, body: JSON.stringify(payload), signal });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-  return result;
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const limit = path === "/api/match-tag" || path === "/api/match-evaluate" ? 105000 : 30000;
+  let timedOut = false;
+  const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, limit);
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) abort();
+  try {
+    const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-AR-Match": "1" }, body: JSON.stringify(payload), signal: controller.signal });
+    const contentType = response.headers.get("Content-Type") || "";
+    if (!contentType.includes("application/json")) {
+      if (response.status === 403) throw new Error("AR 服务拒绝了请求，可能仍在运行旧版。请关闭旧服务窗口，再运行“打开AR网页.cmd”重启。");
+      throw new Error(`AR 服务返回了非 JSON 响应（HTTP ${response.status}），请重启本地服务。`);
+    }
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    return result;
+  } catch (error) {
+    if (timedOut) throw new Error("AI 请求等待超时，请检查 AI 管理中的 API 连接后重试");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abort);
+  }
 }
 async function runBoundedQueue(items, limit, shouldStop, processItem) {
   let nextIndex = 0;
@@ -163,8 +184,56 @@ async function loadMatchState() {
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
     matchUI.data = result;
+    await loadRecommendations(false);
     renderMatch();
   } catch (error) { matchProgress(`读取匹配记录失败：${error.message}。请通过启动脚本打开新版网页。`, true); }
+}
+async function loadRecommendations(updateDataCenter = true) {
+  try {
+    const response = await fetch("/api/recommendations", { cache: "no-store" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    matchUI.recommendations = result.items || [];
+    renderMatch();
+    if (updateDataCenter) renderRecommendationCenter();
+  } catch (error) {
+    if (updateDataCenter) $("dataRecommendationsStatus").textContent = `读取推荐状态失败：${error.message}`;
+    throw error;
+  }
+}
+function renderRecommendationCenter() {
+  const host = $("dataRecommendationsList");
+  if (!host) return;
+  const jobs = new Map(currentJobRecords().map((record) => {
+    const body = textOf(field(record, "AR_JD正文")).trim();
+    const job = { id: `${record.record_id}:2:${jdHash(body)}`, title: compact(field(record, "AR_岗位名称"), 70) || "岗位", company: compact(field(record, "AR_企业名称"), 55) || "校友企业" };
+    return [job.id, job];
+  }));
+  for (const row of matchUI.recommendations) if (!jobs.has(row.job_id)) jobs.set(row.job_id, { id: row.job_id, title: "历史岗位", company: "" });
+  $("dataRecommendationsStatus").textContent = `更新于 ${new Date().toLocaleString("zh-CN")} · 共 ${matchUI.recommendations.length} 位已确认推荐`;
+  host.innerHTML = [...jobs.values()].map((job) => {
+    const rows = matchUI.recommendations.filter((row) => row.job_id === job.id);
+    const interested = rows.filter((row) => row.interest === "感兴趣").length;
+    const hired = rows.filter((row) => row.status === "录用").length;
+    return `<section class="data-job-group"><div class="data-job-heading"><div><h3>${escapeHtml(job.company ? `${job.company} · ${job.title}` : job.title)}</h3><small>已推荐 ${rows.length} 人 · 感兴趣 ${interested} 人 · 已录用 ${hired} 人</small></div></div>${rows.length ? `<div class="data-job-people">${rows.map((row) => `<div class="data-job-person"><strong>${escapeHtml(row.candidate_name || row.candidate_id)}</strong><span>${escapeHtml(row.status === "待反馈" ? "待反馈" : row.status === "面试中" ? "感兴趣 · 面试中" : row.status)}</span></div>`).join("")}</div>` : `<p class="data-job-empty">尚未确认推荐候选人</p>`}</section>`;
+  }).join("") || `<p class="data-job-empty">暂无 JD。请先同步校友岗位。</p>`;
+}
+async function confirmCandidate(candidateId) {
+  if (!matchUI.job || matchUI.busy || matchUI.confirming.has(candidateId)) return;
+  if (recommendationHistory(candidateId).some((row) => row.status === "不感兴趣")) { matchProgress("校友已反馈不感兴趣，不能再次推荐给此 JD。", true); return; }
+  matchUI.confirming.add(candidateId);
+  renderMatch();
+  matchProgress("正在确认推荐，请稍候…", false, true);
+  try {
+    const result = await matchRequest("/api/match-confirm", { job_id: matchUI.job.id, jd_text: matchUI.job.source, candidate_id: candidateId });
+    if (!result.published) throw new Error(result.reason || "推荐未成功");
+    matchUI.selected.delete(candidateId);
+    try {
+      await loadRecommendations();
+      matchProgress(result.cached ? "这位候选人此前已推荐给当前 JD。" : "已确认推荐，校友端现在可以看到这位候选人。");
+    } catch { matchProgress("推荐已保存；刷新推荐状态失败，请稍后刷新页面。", true); }
+  } catch (error) { matchProgress(`确认推荐失败：${error.message}`, true); }
+  finally { matchUI.confirming.delete(candidateId); renderMatch(); }
 }
 function fillLaunchJobs() {
   state.jdUnits = buildJdUnits();
@@ -243,7 +312,9 @@ function renderFilters() {
   $("matchFilterGroups").innerHTML = categories.map(({ name, tags }) => `<fieldset class="match-filter-group"><legend>${escapeHtml(name)}</legend>${tags.map((tag) => `<label class="match-filter-chip"><input type="checkbox" data-filter-category="${escapeHtml(name)}" value="${escapeHtml(tag)}" ${matchUI.filters[name].has(tag) ? "checked" : ""}><span>${escapeHtml(tag)}</span></label>`).join("")}</fieldset>`).join("");
   renderMatch();
 }
-function candidateRecords() { return table("candidate", false)?.records || []; }
+function candidateRecords() {
+  return currentCandidateRecords().filter(record => textOf(field(record, "AR_推荐状态")) !== "停止");
+}
 function filteredCandidates() {
   const query = $("matchKeyword").value.trim().toLocaleLowerCase("zh-CN");
   return candidateRecords().filter((record) => {
@@ -265,21 +336,44 @@ function starsHtml(entry) {
   if (!entry) return `<span class="match-muted">待评估</span>`;
   return `<span class="match-stars" aria-label="${entry.stars} 星"><span>${"★".repeat(entry.stars)}</span><span class="match-stars-dim">${"★".repeat(5 - entry.stars)}</span></span><small>${escapeHtml(entry.model || "AI 评估")}</small>`;
 }
+function recommendationHistory(candidateId) {
+  if (!matchUI.job) return [];
+  return matchUI.recommendations.filter((row) => row.candidate_id === candidateId && (row.job_id === matchUI.job.id || row.job_id.startsWith(`${matchUI.job.sourceKey}:`)));
+}
+function recommendationStatus(rows) {
+  if (rows.some((row) => row.status === "不感兴趣")) return "不感兴趣";
+  const latest = [...rows].sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""))[0];
+  return latest?.status === "待反馈" ? "尚未反馈" : latest?.status === "面试中" ? "感兴趣 · 面试中" : latest?.status || "";
+}
+function selectedForRecommendation() {
+  if (!matchUI.job) return [];
+  const jobId = matchUI.job.id;
+  return [...matchUI.selected].filter((candidateId) => matchUI.data.evaluations[`${jobId}|${candidateId}`] && !recommendationHistory(candidateId).some((row) => row.status === "不感兴趣" || row.job_id === jobId));
+}
 function renderMatch() {
   if (!matchUI.job) return;
   const rows = filteredCandidates();
+  const selectable = rows.filter((record) => !recommendationHistory(record.record_id).some((row) => row.status === "不感兴趣"));
+  for (const id of matchUI.selected) if (recommendationHistory(id).some((row) => row.status === "不感兴趣")) matchUI.selected.delete(id);
   matchUI.records = rows;
   $("matchCount").textContent = rows.length;
   $("matchSelectedCount").textContent = matchUI.selected.size;
-  $("matchSelectAll").checked = rows.length > 0 && rows.every((record) => matchUI.selected.has(record.record_id));
-  $("matchSelectAll").disabled = matchUI.busy;
+  const ready = selectedForRecommendation();
+  $("matchConfirmCount").textContent = ready.length;
+  $("matchConfirmSelected").disabled = matchUI.busy || ready.length === 0;
+  $("matchSelectAll").checked = selectable.length > 0 && selectable.every((record) => matchUI.selected.has(record.record_id));
+  $("matchSelectAll").disabled = matchUI.busy || selectable.length === 0;
   $("matchEvaluate").disabled = matchUI.busy || matchUI.selected.size === 0;
   const jobTag = matchUI.data.job_tags[matchUI.job.id];
   $("matchJobTagStatus").textContent = jobTag ? `JD 标签：${Object.values(jobTag.tags || {}).flat().join(" · ") || "无明确标签"}` : "JD 尚未打标签";
   $("matchRows").innerHTML = rows.length ? rows.map((record) => {
     const id = record.record_id, view = candidateView(record), tag = matchUI.data.candidate_tags[id], assessment = matchUI.data.evaluations[`${matchUI.job.id}|${id}`];
-    return `<tr><td><input type="checkbox" data-match-select="${escapeHtml(id)}" aria-label="选择${escapeHtml(view.title)}" ${matchUI.selected.has(id) ? "checked" : ""} ${matchUI.busy ? "disabled" : ""}></td><td><button type="button" class="match-person" data-match-detail="${escapeHtml(id)}"><span class="match-person-avatar">${escapeHtml(view.avatar)}</span><span><strong>${escapeHtml(view.title)}</strong><small>${escapeHtml(view.subtitle)}</small></span></button></td><td><div class="match-tag-list">${tagPills(tag)}</div></td><td>${starsHtml(assessment)}</td><td class="match-reason">${escapeHtml(matchUI.errors[id] || assessment?.reason || "—")}</td></tr>`;
-  }).join("") : `<tr><td colspan="5" class="match-empty">当前条件下没有候选人。可调整标签条件，或先补齐候选人标签。</td></tr>`;
+    const history = recommendationHistory(id), rejected = history.some((row) => row.status === "不感兴趣");
+    const recommended = history.some((row) => row.job_id === matchUI.job.id);
+    const historyLabel = history.length ? `<span class="match-recommend-history ${rejected ? "match-recommend-rejected" : ""}">已推荐给此 JD ${history.length} 次 · ${escapeHtml(recommendationStatus(history))}</span>` : "";
+    const action = rejected || recommended ? "" : assessment ? `<button type="button" class="match-outline-button match-confirm-button" data-match-confirm="${escapeHtml(id)}" ${matchUI.confirming.has(id) || matchUI.busy ? "disabled" : ""}>${matchUI.confirming.has(id) ? "确认中…" : "确认推荐"}</button>` : `<span class="match-muted">待评估</span>`;
+    return `<tr><td><input type="checkbox" data-match-select="${escapeHtml(id)}" aria-label="选择${escapeHtml(view.title)}" ${matchUI.selected.has(id) ? "checked" : ""} ${matchUI.busy || rejected ? "disabled" : ""}></td><td><button type="button" class="match-person" data-match-detail="${escapeHtml(id)}"><span class="match-person-avatar">${escapeHtml(view.avatar)}</span><span><strong>${escapeHtml(view.title)}</strong><small>${escapeHtml(view.subtitle)}</small></span></button></td><td><div class="match-tag-list">${tagPills(tag)}</div></td><td>${starsHtml(assessment)}</td><td class="match-reason">${escapeHtml(matchUI.errors[id] || assessment?.reason || "—")}</td><td><div class="match-recommend-cell">${historyLabel}${action}</div></td></tr>`;
+  }).join("") : `<tr><td colspan="6" class="match-empty">当前条件下没有候选人。可调整标签条件，或先补齐候选人标签。</td></tr>`;
 }
 function applyJobFilters() {
   if (!matchUI.job) return;
@@ -318,9 +412,9 @@ async function tagJob() {
     matchProgress(result.cached ? "已复用这条 JD 的现有标签。" : "JD 标签已生成并保存。可点击“按 JD 标签初筛”。");
   } catch (error) {
     if (matchUI.tagStopRequested && error.name === "AbortError") { endTagProgress("已停止 · JD 请求已取消等待"); matchProgress("已停止打标签；正在处理的服务端请求可能仍会完成。", false); }
-    else { if (started) { updateTagProgress(1, 1, `JD · 失败：${error.message}`); endTagProgress("JD 标签失败"); } matchProgress(`JD 打标签失败：${error.message}`, true); }
+    else { if (started) { updateTagProgress(1, 1, `JD · 失败：${error.message}`); endTagProgress("JD 标签失败", true); } matchProgress(`JD 打标签失败：${error.message}`, true, true); }
   }
-  finally { matchUI.tagAbortController = null; matchUI.busy = false; $("matchTagJob").disabled = false; }
+  finally { matchUI.tagAbortController = null; matchUI.busy = false; $("matchTagJob").disabled = false; renderMatch(); }
 }
 async function tagCandidates() {
   if (matchUI.busy) return;
@@ -348,17 +442,17 @@ async function tagCandidates() {
     matchProgress(`检查候选人标签失败：${error.message}`, true);
     return;
   } finally {
-    if (!pending.length) { matchUI.busy = false; $("matchTagCandidates").disabled = false; }
+    if (!pending.length) { matchUI.busy = false; $("matchTagCandidates").disabled = false; renderMatch(); }
   }
   beginTagProgress("候选人标签", pending.length);
   const concurrency = Math.max(1, Math.min(10, Number(state.aiConfig?.max_concurrency) || 3));
   matchProgress(`发现 ${pending.length} 位需要打标签；并发 ${Math.min(concurrency, pending.length)} 项，跳过 ${skipped} 位未变化的候选人。`);
   let changed = 0, failed = 0, done = 0, fatalError = "";
-  await runBoundedQueue(pending, concurrency, () => matchUI.tagStopRequested, async (record) => {
+  try { await runBoundedQueue(pending, concurrency, () => matchUI.tagStopRequested, async (record) => {
     const name = candidateView(record).title;
     const controller = new AbortController();
     matchUI.tagAbortControllers.add(controller);
-    $("matchTagProgressCurrent").textContent = `正在并发处理：${name} · 已完成 ${done}/${pending.length}`;
+    $("matchTagProgressCurrent").textContent = `正在等待 AI 返回：${name} · 已完成 ${done}/${pending.length}。单条请求最长约 90 秒，连接失败后会显示原因。`;
     let message = "";
     try {
       const result = await matchRequest("/api/match-tag", { kind: "candidate", id: record.record_id, rules }, controller.signal);
@@ -369,7 +463,7 @@ async function tagCandidates() {
       if (!(matchUI.tagStopRequested && error.name === "AbortError")) {
         failed++;
         message = `${name} · 失败：${error.message}`;
-        if (!matchUI.tagStopRequested && /AI 服务返回 HTTP (401|403|429)\b|无法连接 AI 服务|AI 未返回约定的 JSON 格式/.test(error.message)) {
+        if (!matchUI.tagStopRequested && /AI 服务返回 HTTP (401|403|429)\b|无法连接 AI 服务|AI 请求等待超时|AI 未返回约定的 JSON 格式/.test(error.message)) {
           fatalError = error.message;
           matchUI.tagStopRequested = true;
         }
@@ -382,12 +476,16 @@ async function tagCandidates() {
         renderMatch();
       }
     }
-  });
-  matchUI.busy = false;
-  $("matchTagCandidates").disabled = false;
-  const summary = fatalError ? `服务错误，已停止 · ${done}/${pending.length}` : matchUI.tagStopRequested ? `已停止 · ${done}/${pending.length}` : `已完成 · ${done}/${pending.length}`;
-  endTagProgress(summary);
-  matchProgress(fatalError ? `打标签因 ${fatalError} 而停止；其余未发送的记录可稍后重试。` : `${matchUI.tagStopRequested ? "已停止" : "标签检查完成"}：新生成 ${changed} 份，失败 ${failed} 份，跳过未变化 ${skipped} 份。`, failed > 0);
+  }); } catch (error) {
+    fatalError = error.message;
+  } finally {
+    matchUI.busy = false;
+    $("matchTagCandidates").disabled = false;
+    renderMatch();
+  }
+  const summary = fatalError ? `服务错误，已停止 · ${done}/${pending.length}` : matchUI.tagStopRequested ? `已停止 · ${done}/${pending.length}` : failed ? `部分失败 · ${done}/${pending.length}` : `已完成 · ${done}/${pending.length}`;
+  endTagProgress(summary, !!fatalError || failed > 0);
+  matchProgress(fatalError ? `打标签因 ${fatalError} 而停止；其余未发送的记录可稍后重试。` : `${matchUI.tagStopRequested ? "已停止" : "标签检查完成"}：新生成 ${changed} 份，失败 ${failed} 份，跳过未变化 ${skipped} 份。`, failed > 0, failed > 0);
 }
 async function evaluateSelected() {
   if (matchUI.busy || !matchUI.job || !matchUI.selected.size) return;
@@ -400,9 +498,9 @@ async function evaluateSelected() {
   const jobId = matchUI.job.id;
   const jdText = matchUI.job.source;
   const concurrency = Math.max(1, Math.min(10, Number(state.aiConfig?.max_concurrency) || 3));
-  matchProgress(`正在评估 ${ids.length} 位候选人；最多并发 ${Math.min(concurrency, ids.length)} 项。`);
-  let completed = 0, reused = 0, failed = 0, done = 0;
-  await runBoundedQueue(ids, concurrency, () => matchUI.evalStopRequested, async (id) => {
+  matchProgress(`正在评估 ${ids.length} 位候选人；最多并发 ${Math.min(concurrency, ids.length)} 项。`, false, true);
+  let completed = 0, reused = 0, failed = 0, done = 0, interrupted = "";
+  try { await runBoundedQueue(ids, concurrency, () => matchUI.evalStopRequested, async (id) => {
     const record = candidateRecords().find((item) => item.record_id === id);
     const name = record ? candidateView(record).title : id;
     const controller = new AbortController();
@@ -414,8 +512,7 @@ async function evaluateSelected() {
       matchUI.data.evaluations[`${jobId}|${id}`] = result;
       delete matchUI.errors[id];
       result.cached ? reused++ : completed++;
-      matchUI.selected.delete(id);
-      message = `${name} · ${result.cached ? "复用已有评分" : `${result.stars} 星，评估完成`}`;
+      message = `${name} · ${result.cached ? "复用已有评分" : `${result.stars} 星，评估完成`} · 请确认是否推荐`;
     } catch (error) {
       if (!(matchUI.evalStopRequested && error.name === "AbortError")) {
         matchUI.errors[id] = `评估失败：${error.message}`;
@@ -430,11 +527,45 @@ async function evaluateSelected() {
         renderMatch();
       }
     }
-  });
-  matchUI.busy = false;
-  renderMatch();
+  }); } catch (error) {
+    failed++;
+    interrupted = error.message;
+  } finally {
+    matchUI.busy = false;
+    renderMatch();
+  }
   endEvalProgress(matchUI.evalStopRequested ? `已停止 · ${done}/${ids.length}` : `已完成 · ${done}/${ids.length}`);
-  matchProgress(`${matchUI.evalStopRequested ? "已停止" : "评估完成"}：新分析 ${completed} 人，复用结果 ${reused} 人，失败 ${failed} 人。${matchUI.selected.size ? `仍有 ${matchUI.selected.size} 人可继续评估。` : ""}`, failed > 0);
+  matchProgress(interrupted ? `评估被中断：${interrupted}。可重新选择候选人重试。` : `${matchUI.evalStopRequested ? "已停止" : "评估完成"}：新分析 ${completed} 人，复用结果 ${reused} 人，失败 ${failed} 人。勾选已保留，可直接批量确认推荐。`, failed > 0);
+}
+async function confirmSelected() {
+  if (matchUI.busy || !matchUI.job) return;
+  const ids = selectedForRecommendation();
+  if (!ids.length) { matchProgress("所选候选人中没有待确认的已评估记录。", true); return; }
+  const job = matchUI.job;
+  matchUI.busy = true;
+  $("matchChangeJob").disabled = true;
+  renderMatch();
+  let succeeded = 0, failed = 0;
+  try { for (const [index, id] of ids.entries()) {
+    matchProgress(`正在确认推荐 ${index + 1}/${ids.length} 人…`, false, true);
+    try {
+      const result = await matchRequest("/api/match-confirm", { job_id: job.id, jd_text: job.source, candidate_id: id });
+      if (!result.published) throw new Error(result.reason || "推荐未成功");
+      succeeded++;
+      matchUI.selected.delete(id);
+      delete matchUI.errors[id];
+    } catch (error) {
+      failed++;
+      matchUI.errors[id] = `推荐失败：${error.message}`;
+    }
+  } } finally {
+    matchUI.busy = false;
+    $("matchChangeJob").disabled = false;
+    renderMatch();
+  }
+  try { await loadRecommendations(); } catch { matchProgress(`已保存 ${succeeded} 人；推荐状态暂时无法刷新。`, true); renderMatch(); return; }
+  renderMatch();
+  matchProgress(`批量推荐完成：成功 ${succeeded} 人，失败 ${failed} 人。${failed ? "失败的人仍保持勾选，可查看对应行并重试。" : ""}`, failed > 0);
 }
 function onCatalogUpdated() {
   if (matchUI.job) {
@@ -443,7 +574,7 @@ function onCatalogUpdated() {
     renderMatch();
   }
 }
-window.AR_MATCH = { openLaunch, openWorkspace, onCatalogUpdated };
+window.AR_MATCH = { openLaunch, openWorkspace, onCatalogUpdated, refreshRecommendations: loadRecommendations };
 document.addEventListener("DOMContentLoaded", () => {
   writeRuleInputs();
   $("tagRulesSave").addEventListener("click", saveTagRules);
@@ -472,10 +603,13 @@ document.addEventListener("DOMContentLoaded", () => {
   $("matchKeyword").addEventListener("input", renderMatch);
   $("matchResetFilters").addEventListener("click", () => { for (const category of Object.keys(matchUI.filters)) matchUI.filters[category].clear(); $("matchKeyword").value = ""; renderFilters(); });
   $("matchFilterGroups").addEventListener("change", (event) => { const input = event.target.closest("[data-filter-category]"); if (!input) return; const set = matchUI.filters[input.dataset.filterCategory]; input.checked ? set.add(input.value) : set.delete(input.value); renderMatch(); });
-  $("matchSelectAll").addEventListener("change", (event) => { for (const record of matchUI.records) event.target.checked ? matchUI.selected.add(record.record_id) : matchUI.selected.delete(record.record_id); renderMatch(); });
-  $("matchRows").addEventListener("change", (event) => { const input = event.target.closest("[data-match-select]"); if (!input) return; input.checked ? matchUI.selected.add(input.dataset.matchSelect) : matchUI.selected.delete(input.dataset.matchSelect); renderMatch(); });
-  $("matchRows").addEventListener("click", (event) => { const button = event.target.closest("[data-match-detail]"); if (!button) return; const record = candidateRecords().find((item) => item.record_id === button.dataset.matchDetail); if (record) showDetail(record, "candidate"); });
+  $("matchSelectAll").addEventListener("change", (event) => { for (const record of matchUI.records) if (!recommendationHistory(record.record_id).some((row) => row.status === "不感兴趣")) event.target.checked ? matchUI.selected.add(record.record_id) : matchUI.selected.delete(record.record_id); renderMatch(); });
+  $("matchRows").addEventListener("change", (event) => { const input = event.target.closest("[data-match-select]"); if (!input) return; if (!recommendationHistory(input.dataset.matchSelect).some((row) => row.status === "不感兴趣")) input.checked ? matchUI.selected.add(input.dataset.matchSelect) : matchUI.selected.delete(input.dataset.matchSelect); renderMatch(); });
+  $("matchRows").addEventListener("click", (event) => { const confirm = event.target.closest("[data-match-confirm]"); if (confirm) { confirmCandidate(confirm.dataset.matchConfirm); return; } const button = event.target.closest("[data-match-detail]"); if (!button) return; const record = candidateRecords().find((item) => item.record_id === button.dataset.matchDetail); if (record) showDetail(record, "candidate"); });
+  $("dataRecommendationsRefresh").addEventListener("click", () => loadRecommendations().catch(() => {}));
+  setInterval(() => { if (!$("dataView").hidden || !$("matchView").hidden) loadRecommendations().catch(() => {}); }, 15000);
   $("matchEvaluate").addEventListener("click", evaluateSelected);
+  $("matchConfirmSelected").addEventListener("click", confirmSelected);
   $("matchStopEvaluation").addEventListener("click", () => { matchUI.evalStopRequested = true; for (const controller of matchUI.evalAbortControllers) controller.abort(); $("matchStopEvaluation").disabled = true; $("matchEvalProgressPanel").hidden = true; matchProgress("已停止 AI 评估；未完成的候选人仍保持选中。已发出的服务端请求可能仍会完成。", false); });
   document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !$("matchLaunchModal").hidden) closeLaunch(); });
   loadMatchState();

@@ -5,6 +5,12 @@ const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => 
 function table(kind, archived = false) {
   return state.tables.find((item) => item.kind === kind && item.archived === archived);
 }
+function currentCandidateRecords() {
+  return (table("candidate_output", false)?.records || []).filter(record => textOf(field(record, "AR_记录类型")) === "account" && (field(record, "简历") || field(record, "AR_简历说明")));
+}
+function currentJobRecords() {
+  return (table("alumni_output", false)?.records || []).filter(record => textOf(field(record, "AR_记录类型")) === "job" && field(record, "AR_JD正文"));
+}
 
 function fieldsOf(record) { return record?.fields || {}; }
 function field(record, ...names) {
@@ -45,18 +51,18 @@ function attachmentItems(record) {
   return Object.values(fieldsOf(record)).flatMap((value) => Array.isArray(value) ? value.filter((part) => part && typeof part === "object" && part.file_token) : []);
 }
 function candidateView(record) {
-  const name = compact(field(record, "姓名 2", "姓名", "名字"), 45) || "未命名候选人";
+  const name = compact(field(record, "姓名", "AR_姓名", "姓名 2", "名字"), 45) || "未命名候选人";
   const school = compact(field(record, "学校、专业、入学时间-毕业时间"), 80);
-  const role = compact(field(record, "意向投递的目标公司或岗位", "意向投递公司/岗位（选填）", "请对你想在被投企业中做的具体岗位/方向，做个简易描述"), 145);
+  const role = compact(field(record, "意向投递的目标公司或岗位", "意向投递公司/岗位（选填）", "请对你想在被投企业中做的具体岗位/方向，做个简易描述", "AR_简历说明"), 145);
   const location = compact(field(record, "意向base地（可多选）", "意向base地（多选）"), 40);
-  const summary = compact(field(record, "请对你想在被投企业中做的具体岗位/方向，做个简易描述", "是什么原因让你决定申请被投企业联合招聘项目？", "学校、专业、入学时间-毕业时间"), 135);
+  const summary = compact(field(record, "AR_简历说明", "请对你想在被投企业中做的具体岗位/方向，做个简易描述", "是什么原因让你决定申请被投企业联合招聘项目？", "学校、专业、入学时间-毕业时间"), 135);
   const tags = [location, compact(field(record, "你更想以什么角色加入奇绩的被投企业（多选） 2", "期望参与的工作类型"), 48)].filter(Boolean);
   return { title: name, subtitle: school || role || "候选人档案", summary, tags, date: dateOf(record), attachments: attachmentItems(record).length, avatar: name.slice(0, 1) };
 }
 function jobView(record) {
-  const company = compact(field(record, "公司名称（对外展示的名称）", "公司名称", "企业名称"), 55) || "未命名企业";
-  const position = compact(field(record, "开放岗位", "岗位名称", "招聘岗位"), 100);
-  const intro = compact(field(record, "公司介绍", "为什么候选人应该加入你们？（选填）", "开放岗位2（若有更多的岗位也可一并汇总写在这一栏）"), 145);
+  const company = compact(field(record, "AR_企业名称", "公司名称（对外展示的名称）", "公司名称", "企业名称"), 55) || "未命名企业";
+  const position = compact(field(record, "AR_岗位名称", "开放岗位", "岗位名称", "招聘岗位"), 100);
+  const intro = compact(field(record, "AR_JD正文", "公司介绍", "为什么候选人应该加入你们？（选填）", "开放岗位2（若有更多的岗位也可一并汇总写在这一栏）"), 145);
   const tags = [position, compact(field(record, "开放岗位2（若有更多的岗位也可一并汇总写在这一栏）"), 45)].filter(Boolean);
   return { title: company, subtitle: position || "校友企业招聘需求", summary: intro, tags, date: dateOf(record), attachments: attachmentItems(record).length, avatar: company.slice(0, 1) };
 }
@@ -72,11 +78,10 @@ function cardHtml(record, index, kind) {
 function emptyHtml(title, detail) { return `<div class="empty-state"><div class="empty-icon" aria-hidden="true">⌕</div><strong>${escapeHtml(title)}</strong><p>${escapeHtml(detail)}</p></div>`; }
 
 function renderList(kind) {
-  const archived = kind === "candidate" && state.candidateTab === "archive";
-  const source = table(kind, archived);
+  const source = table(kind === "candidate" ? "candidate_output" : "alumni_output", false);
   const input = $(kind === "candidate" ? "candidateSearch" : "jobSearch");
   const query = input.value.trim().toLocaleLowerCase("zh-CN");
-  const records = [...(source?.records || [])].sort((a, b) => recordTimestamp(b) - recordTimestamp(a));
+  const records = [...(kind === "candidate" ? currentCandidateRecords() : currentJobRecords())].sort((a, b) => recordTimestamp(b) - recordTimestamp(a));
   const visible = records.filter((record) => searchRecord(record, query));
   if (kind === "candidate") state.visibleCandidates = visible;
   else state.visibleJobs = visible;
@@ -103,7 +108,7 @@ function attachmentHtml(item, source) {
   return `<a class="attachment-row" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer"><span class="attachment-left"><span class="attachment-icon">↳</span><span><span class="attachment-name">${escapeHtml(name)}</span><span class="attachment-size">${escapeHtml(size)}</span></span></span><span class="attachment-open" aria-hidden="true">↗</span></a>`;
 }
 function showDetail(record, kind) {
-  const source = table(kind, kind === "candidate" && state.candidateTab === "archive");
+  const source = table(kind === "candidate" ? "candidate_output" : "alumni_output", false);
   const view = kind === "candidate" ? candidateView(record) : jobView(record);
   const fieldTypes = new Map((source.fields || []).map((item) => [item.field_name, item.type]));
   let fields = "", attachments = "";
@@ -114,7 +119,7 @@ function showDetail(record, kind) {
     const formatted = formatFieldValue(value, fieldTypes.get(name));
     if (formatted) fields += `<div class="drawer-field"><div class="drawer-field-label">${escapeHtml(name)}</div><div class="drawer-field-value ${formatted.length > 140 ? "long" : ""}">${escapeHtml(formatted)}</div></div>`;
   }
-  $("drawerOverline").textContent = kind === "candidate" ? (state.candidateTab === "archive" ? "ARCHIVED TALENT" : "CANDIDATE PROFILE") : "ALUMNI OPPORTUNITY";
+  $("drawerOverline").textContent = kind === "candidate" ? "CANDIDATE PROFILE" : "ALUMNI OPPORTUNITY";
   $("drawerContent").innerHTML = `<div class="drawer-hero"><span class="avatar drawer-avatar ${kind === "job" ? "job-avatar" : ""}">${escapeHtml(view.avatar)}</span><div><div class="drawer-kind">${kind === "candidate" ? "候选人档案" : "校友企业 · 招聘需求"}</div><h2 class="drawer-title">${escapeHtml(view.title)}</h2><p class="drawer-subtitle">${escapeHtml(view.subtitle)}</p></div></div>${attachments ? `<div class="drawer-section-title">相关附件</div>${attachments}` : ""}<div class="drawer-section-title">完整信息</div>${fields || '<p class="drawer-field-value">暂无其他信息</p>'}<div class="drawer-meta">记录 ID：${escapeHtml(record.record_id || "—")} · 来源：${escapeHtml(source.name)}</div>`;
   state.previousFocus = document.activeElement;
   $("drawerBackdrop").hidden = false;
@@ -133,36 +138,36 @@ function closeDetail() {
   state.previousFocus?.focus();
 }
 function updateSummary() {
-  const current = table("candidate", false), archive = table("candidate", true), jobs = table("job", false);
-  const count = (item) => item?.records.length || 0;
+  const candidates = table("candidate_output", false), jobs = table("alumni_output", false);
   const archiveTab = document.querySelector('[data-candidate-tab="archive"]');
-  archiveTab.hidden = !archive;
-  if (!archive && state.candidateTab === "archive") {
+  archiveTab.hidden = true;
+  if (state.candidateTab === "archive") {
     state.candidateTab = "current";
     archiveTab.classList.remove("active");
     archiveTab.setAttribute("aria-pressed", "false");
     document.querySelector('[data-candidate-tab="current"]').classList.add("active");
     document.querySelector('[data-candidate-tab="current"]').setAttribute("aria-pressed", "true");
   }
-  $("metricCandidates").textContent = count(current);
-  $("metricArchive").textContent = archive ? count(archive) : state.tables.length;
-  $("metricThirdLabel").textContent = archive ? "历史存档" : "已接入数据表";
-  $("metricThirdFoot").textContent = archive ? "旧版候选人表" : "含输出表与流转简历";
-  $("metricJobs").textContent = count(jobs);
-  $("candidateHeadingCount").textContent = state.candidateTab === "archive" ? count(archive) : count(current);
-  $("jobHeadingCount").textContent = count(jobs);
-  const available = state.tables.filter((item) => item.available);
-  $("syncState").textContent = available.length === state.tables.length ? "已同步" : `已同步 ${available.length}/${state.tables.length}`;
+  $("metricCandidates").textContent = currentCandidateRecords().length;
+  $("metricArchive").textContent = (jobs?.records || []).filter(record => textOf(field(record, "AR_记录类型")) === "recommendation").length;
+  $("metricThirdLabel").textContent = "推荐记录";
+  $("metricThirdFoot").textContent = "已进入校友端的推荐";
+  $("metricJobs").textContent = currentJobRecords().length;
+  $("candidateHeadingCount").textContent = currentCandidateRecords().length;
+  $("jobHeadingCount").textContent = currentJobRecords().length;
+  const activeTables = [candidates, jobs].filter(Boolean);
+  const available = activeTables.filter((item) => item.available);
+  $("syncState").textContent = available.length === 2 ? "已同步" : `已同步 ${available.length}/2`;
   const newest = Math.max(...available.map((item) => new Date(item.synced_at).getTime()), 0);
   $("syncTime").textContent = newest ? `最近读取 ${new Date(newest).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}` : "尚无本地数据";
-  const missing = state.tables.filter((item) => !item.available).map((item) => item.name);
+  const missing = activeTables.filter((item) => !item.available).map((item) => item.name);
   $("missingNotice").hidden = !missing.length;
   if (missing.length) $("missingNotice").textContent = `以下数据表还没有本地快照：${missing.join("、")}。请在终端运行 python ar.py pull --all-tables，然后重新打开网页。`;
   renderFlow();
 }
 function renderFlow() {
-  const candidates = table("candidate", false)?.records || [];
-  const jobs = table("job", false)?.records || [];
+  const candidates = currentCandidateRecords();
+  const jobs = currentJobRecords();
   $("flowCandidateTotal").textContent = `${candidates.length} 位候选人`;
   $("flowJobTotal").textContent = `${jobs.length} 条招聘需求`;
   const node = (record, kind, index) => {
@@ -223,11 +228,12 @@ async function syncFromFeishu() {
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
     if (result.changed) {
       await loadCatalog();
-      const changedTables = result.tables.filter((item) => item.changed);
+      const activeIds = new Set([table("candidate_output", false)?.id, table("alumni_output", false)?.id]);
+      const changedTables = result.tables.filter((item) => item.changed && activeIds.has(item.id));
       const detail = changedTables.map((item) => `${item.name}：新增 ${item.added}、修改 ${item.edited}、移除 ${item.removed}`).join("；");
-      showSyncFeedback(`已更新本地数据。${detail}${result.downloaded ? `；新附件 ${result.downloaded} 个` : ""}`);
+      showSyncFeedback(detail ? `已更新工作台数据。${detail}` : "已检查飞书：工作台数据没有变化。");
     } else {
-      showSyncFeedback("已检查飞书：三张表均无变化，本地文件未改动。");
+      showSyncFeedback("已检查飞书：数据没有变化，本地文件未改动。");
     }
   } catch (error) {
     showSyncFeedback(`检查失败：${error.message}`, true);
@@ -246,6 +252,8 @@ function showView(view, navId, target) {
   if (state.promptInitialized && view !== "ai") savePrompt(false);
   for (const name of ["overview", "directory", "ai", "match", "data"]) $(`${name}View`).hidden = view !== name;
   if (view === "ai" && !state.promptInitialized) preparePrompt();
+  if (view === "ai") window.AR_AI_HISTORY?.load(true);
+  if (view === "data") window.AR_MATCH?.refreshRecommendations().catch(() => {});
   document.querySelectorAll(".nav-item").forEach((item) => { item.classList.remove("active"); item.removeAttribute("aria-current"); });
   $(navId).classList.add("active");
   $(navId).setAttribute("aria-current", "page");
@@ -287,17 +295,11 @@ function jdTitle(text, fieldIndex, segmentIndex) {
   return compact(title.replace(/^(?:岗位名称|职位名称)\s*[:：]\s*/, "").replace(/^【([^】]+)】$/, "$1"), 36) || `岗位 ${fieldIndex + 1}.${segmentIndex + 1}`;
 }
 function buildJdUnits() {
-  const jobs = table("job", false)?.records || [];
-  return jobs.flatMap((record) => {
-    const company = jobView(record).title;
-    return JOB_FIELDS.flatMap((fieldName, fieldIndex) => {
-      const sourceKey = `${record.record_id}:${fieldIndex}`;
-      return splitJdText(field(record, fieldName), sourceKey).map(({ body, start }, segmentIndex) => {
-      const title = jdTitle(body, fieldIndex, segmentIndex);
-      return { id: `${sourceKey}:${jdHash(body)}`, company, title, source: body, body, start, sourceKey };
-      });
-    });
-  });
+  const portalUnits = (table("alumni_output", false)?.records || []).filter((record) => textOf(field(record, "AR_记录类型")) === "job" && textOf(field(record, "AR_招聘状态")) !== "停止").map((record) => {
+    const body = textOf(field(record, "AR_JD正文")).trim();
+    return { id: `${record.record_id}:2:${jdHash(body)}`, company: compact(field(record, "AR_企业名称"), 55) || "校友企业", title: compact(field(record, "AR_岗位名称"), 70) || "岗位", source: body, body, start: 0, sourceKey: `${record.record_id}:2` };
+  }).filter((unit) => unit.body);
+  return portalUnits;
 }
 function activeJd() { return state.jdUnits.find((unit) => unit.id === state.activeJdId); }
 function updatePromptPreview() {
@@ -347,6 +349,7 @@ function splitCurrentJd() {
   const marker = $("promptSplitMarker").value.trim();
   const status = $("promptSplitStatus");
   if (!unit || !marker) { status.textContent = "请先选择 JD 并填写下一条岗位的开头文字。"; return; }
+  if (unit.sourceKey.endsWith(":2")) { status.textContent = "这条 JD 已经是独立岗位；请在校友端修改内容。"; return; }
   const localIndex = unit.body.indexOf(marker);
   if (localIndex <= 0 || localIndex !== unit.body.lastIndexOf(marker)) { status.textContent = "这段文字需要在当前 JD 中只出现一次，并且不能是开头。"; return; }
   const raw = textOf(field((table("job", false)?.records || []).find((record) => unit.sourceKey.startsWith(`${record.record_id}:`)), JOB_FIELDS[Number(unit.sourceKey.split(":").at(-1))])).trim();
@@ -445,6 +448,33 @@ async function fetchAiModels() {
   } catch (error) { aiStatus(`获取模型列表失败：${error.message}。你也可以手动填写模型 ID。`, true); }
   finally { button.disabled = false; }
 }
+async function testAiConnection() {
+  const button = $("aiTestConnection");
+  const status = $("aiTestStatus");
+  const model = $("aiManualModel").hidden ? $("aiModelSelect").value : $("aiManualModel").value.trim();
+  const payload = { base_url: $("aiBaseUrl").value.trim(), model, api_key: $("aiApiKey").value, clear_key: $("aiClearKey").checked };
+  if (!payload.base_url || !payload.model) { status.textContent = "请先填写 API 基础地址并选择模型。"; status.classList.add("error"); return; }
+  button.disabled = true;
+  button.textContent = "正在测试…";
+  status.textContent = "正在向所选模型发送测试消息，最长约 30 秒…";
+  status.classList.remove("error");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 35000);
+  try {
+    const response = await fetch("/api/ai-test", { method: "POST", headers: { "Content-Type": "application/json", "X-AR-Config": "1" }, body: JSON.stringify(payload), signal: controller.signal });
+    if (!(response.headers.get("Content-Type") || "").includes("application/json")) throw new Error("本地服务仍是旧版，请重新运行“打开AR网页.cmd”后重试");
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    status.textContent = `连接成功 · ${result.model} · ${result.elapsed_seconds} 秒`;
+  } catch (error) {
+    status.textContent = `连接失败：${error.name === "AbortError" ? "等待超时，请检查网络和 API 地址" : error.message}`;
+    status.classList.add("error");
+  } finally {
+    clearTimeout(timeout);
+    button.disabled = false;
+    button.textContent = "测试连接";
+  }
+}
 document.addEventListener("DOMContentLoaded", () => {
   $("todayLabel").textContent = new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" });
   $("refreshButton").addEventListener("click", syncFromFeishu);
@@ -471,6 +501,9 @@ document.addEventListener("DOMContentLoaded", () => {
   $("promptSplitToggle").addEventListener("click", () => { $("promptSplitPanel").hidden = !$("promptSplitPanel").hidden; });
   $("promptSplitApply").addEventListener("click", splitCurrentJd);
   $("aiConfigForm").addEventListener("submit", (event) => { event.preventDefault(); saveAiConfig(); });
+  $("aiTestConnection").addEventListener("click", testAiConnection);
+  $("aiConfigForm").addEventListener("input", () => { $("aiTestStatus").textContent = ""; });
+  $("aiConfigForm").addEventListener("change", () => { $("aiTestStatus").textContent = ""; });
   $("aiFetchModels").addEventListener("click", fetchAiModels);
   $("aiManualModelToggle").addEventListener("click", () => {
     const input = $("aiManualModel");

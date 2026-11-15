@@ -223,12 +223,15 @@ def main(argv: list[str] | None = None) -> int:
     p_set.add_argument("field")
     p_set.add_argument("value", help="普通文本；复杂字段用 --json")
     p_set.add_argument("--json", action="store_true", help="将 value 解析为 JSON")
+    p_set.add_argument("--table", choices=["candidate_output", "alumni_output"], help="仅允许写入 AR 输出表")
     p_create = sub.add_parser("create", help="新增记录")
     p_create.add_argument("fields_json", help='JSON 对象，或 @文件路径（从 JSON 文件读取）')
+    p_create.add_argument("--table", choices=["candidate_output", "alumni_output"], help="仅允许写入 AR 输出表")
     p_attach = sub.add_parser("attach", help="向现有记录的附件字段追加本地文件")
     p_attach.add_argument("record_id")
     p_attach.add_argument("field")
     p_attach.add_argument("file", type=Path)
+    p_attach.add_argument("--table", choices=["candidate_output", "alumni_output"], help="仅允许写入 AR 输出表")
     args = parser.parse_args(argv)
 
     try:
@@ -250,6 +253,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         config = json.loads(args.config.read_text(encoding="utf-8"))
         app_token, table_id = identifiers(config["base_url"])
+        if args.command in {"create", "set", "attach"}:
+            writable = {item["kind"]: item["id"] for item in config.get("tables", []) if item.get("kind") in {"candidate_output", "alumni_output"}}
+            table_id = writable.get(args.table) if args.table else table_id
+            if table_id not in writable.values():
+                raise FeishuError("原始数据表只读；请用 --table candidate_output 或 --table alumni_output 指定 AR 输出表")
         from credentials import get_credentials
         app_id, app_secret = get_credentials()
         client = Client(app_id, app_secret)

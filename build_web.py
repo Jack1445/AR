@@ -42,6 +42,8 @@ def read_json(path: Path, default):
 def catalog() -> dict:
     tables = []
     for config in TABLES:
+        if config["kind"] not in {"candidate_output", "alumni_output"} or config["archived"]:
+            continue
         folder = DATA / config["id"]
         records_path = folder / "records.json"
         tables.append({
@@ -59,7 +61,7 @@ def clean(value):
     if isinstance(value, list):
         return [clean(item) for item in value]
     if isinstance(value, dict):
-        return {key: clean(item) for key, item in value.items() if key not in {"tmp_url", "url"} or "file_token" not in value}
+        return {key: clean(item) for key, item in value.items() if key != "AR_密码摘要" and (key not in {"tmp_url", "url"} or "file_token" not in value)}
     return value
 
 
