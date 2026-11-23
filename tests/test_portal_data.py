@@ -8,6 +8,8 @@ import portal_data
 import recommendation_store
 from tests.pg_test import isolated_schema
 
+JOB_ARGS = {"work_location": "北京", "attendance_mode": "线上线下结合", "job_categories": ["日常实习", "可转正"], "min_days_per_week": "4天"}
+
 
 class FakeClient:
     def __init__(self):
@@ -86,6 +88,12 @@ class PortalDataTests(unittest.TestCase):
         self.assertEqual(row["fields"]["AR_推荐状态"], "停止")
         self.assertTrue(all(kind == "candidate_output" for _, kind, _body in self.client.writes if _body.get("fields", {}).get("AR_记录类型") == "account" or _body.get("fields", {}).get("AR_推荐状态")))
 
+    def test_welcome_name_keeps_english_and_uses_last_two_chinese_characters(self):
+        self.assertEqual(portal_data.greeting_name("Jack Smith"), "Jack Smith")
+        self.assertEqual(portal_data.greeting_name("雷军"), "Leijun")
+        self.assertEqual(portal_data.greeting_name("马化腾"), "Huateng")
+        self.assertEqual(portal_data.greeting_name("欧阳娜娜"), "Nana")
+
     def test_mp_login_binds_subject_not_phone(self):
         identity = portal_data.login_with_mp("candidate", "mp-user-1", "13800138000")
         self.assertEqual(portal_data.login_with_mp("candidate", "mp-user-1", "13800138000"), identity)
@@ -101,11 +109,11 @@ class PortalDataTests(unittest.TestCase):
             portal_data.login_with_mp("candidate", "mp-user-1", "")
         self.assertEqual(raised.exception.code, "invalid_phone")
 
-    def test_mp_login_reports_existing_phone_account(self):
-        portal_data.register("candidate", "13800138000", "password")
-        with self.assertRaises(portal_data.MpLoginError) as raised:
-            portal_data.login_with_mp("candidate", "mp-user-1", "13800138000")
-        self.assertEqual(raised.exception.code, "phone_in_use")
+    def test_mp_login_binds_unique_unbound_candidate_account(self):
+        legacy = portal_data.register("candidate", "13800138000", "password")
+        identity = portal_data.login_with_mp("candidate", "mp-user-1", "13800138000")
+        self.assertEqual(identity, legacy)
+        self.assertEqual(self.client.rows["candidate_output"][0]["fields"]["AR_MP用户ID"], "mp-user-1")
 
     def test_mp_login_binds_legacy_account_by_matching_phone(self):
         legacy = portal_data.register("alumni", "13800138000", "abcde")
@@ -116,12 +124,12 @@ class PortalDataTests(unittest.TestCase):
     def test_multiple_jobs_ownership_and_feedback(self):
         owner = portal_data.register("alumni", "13800138000", "abcde")
         stranger = portal_data.register("alumni", "13900139000", "abcde")
-        portal_data.save_alumni_company(owner, "测试企业")
-        one = portal_data.save_job(owner, title="产品经理", body="负责产品设计")
-        two = portal_data.save_job(owner, title="运营经理", body="负责用户运营")
+        portal_data.save_alumni_company(owner, "测试企业", "张三", "HR")
+        one = portal_data.save_job(owner, title="产品经理", body="负责产品设计", **JOB_ARGS)
+        two = portal_data.save_job(owner, title="运营经理", body="负责用户运营", **JOB_ARGS)
         self.assertEqual(len(portal_data.list_jobs(owner)), 2)
         with self.assertRaises(ValueError):
-            portal_data.save_job(stranger, record_id=one["id"], title="篡改", body="不允许")
+            portal_data.save_job(stranger, record_id=one["id"], title="篡改", body="不允许", **JOB_ARGS)
         rec = recommendation_store.create(one["id"] + ":2:hash", "recCandidate01", owner["id"], "候选人", "资料", 4, "适合")
         self.assertEqual(portal_data.list_recommendations(owner)[0]["job_title"], "产品经理")
         self.assertFalse(portal_data.list_recommendations(stranger))
@@ -131,13 +139,13 @@ class PortalDataTests(unittest.TestCase):
         self.assertEqual(recommendation_store.get(rec["id"])["interest"], "感兴趣")
         self.assertEqual(portal_data.feedback(owner, rec["id"], "录用")["status"], "录用")
         self.assertEqual(recommendation_store.get(rec["id"])["status"], "录用")
-        with self.assertRaises(ValueError):
-            portal_data.feedback(owner, rec["id"], "未录用")
+        self.assertEqual(portal_data.feedback(owner, rec["id"], "未录用")["status"], "未录用")
+        self.assertEqual(portal_data.feedback(owner, rec["id"], "录用")["status"], "录用")
 
     def test_feedback_can_be_revised_and_restored_with_local_history(self):
         owner = portal_data.register("alumni", "13800138000", "abcde")
-        portal_data.save_alumni_company(owner, "测试企业")
-        job = portal_data.save_job(owner, title="产品经理", body="负责产品设计")
+        portal_data.save_alumni_company(owner, "测试企业", "张三", "HR")
+        job = portal_data.save_job(owner, title="产品经理", body="负责产品设计", **JOB_ARGS)
         rec = recommendation_store.create(job["id"] + ":2:hash", "recCandidate02", owner["id"], "候选人", "资料", 4, "适合")
         self.assertEqual(portal_data.feedback(owner, rec["id"], "不感兴趣")["status"], "不感兴趣")
         self.assertEqual(portal_data.feedback(owner, rec["id"], "待反馈")["status"], "待反馈")
@@ -148,29 +156,73 @@ class PortalDataTests(unittest.TestCase):
             history = [row["to_status"] for row in db.execute("SELECT to_status FROM feedback_events WHERE recommendation_id = %s ORDER BY id", (rec["id"],))]
         self.assertEqual(history, ["不感兴趣", "待反馈", "面试中", "不感兴趣"])
 
-    def test_company_contact_and_introduction_use_existing_feishu_fields(self):
+    def test_company_contact_name_and_role_use_separate_feishu_fields(self):
         owner = portal_data.register("alumni", "13800138000", "abcde")
-        saved = portal_data.save_alumni_company(owner, "NVIDIA", "张三 · 招聘负责人", "研发 AI 产品的团队")
-        self.assertEqual(saved["contact_title"], "张三 · 招聘负责人")
-        self.assertEqual(saved["introduction"], "研发 AI 产品的团队")
-        job = portal_data.save_job(owner, title="产品经理", body="负责产品设计")
-        portal_data.save_alumni_company(owner, "NVIDIA", "李四 · HR", "更新后的公司介绍")
+        saved = portal_data.save_alumni_company(owner, "NVIDIA", "张三", "招聘负责人")
+        self.assertEqual(saved["contact_name"], "张三")
+        self.assertEqual(saved["contact_role"], "招聘负责人")
+        job = portal_data.save_job(owner, title="产品经理", body="负责产品设计", **JOB_ARGS)
+        portal_data.save_alumni_company(owner, "NVIDIA", "李四", "HR")
         account_row = next(row for row in self.client.rows["alumni_output"] if row["record_id"] == owner["id"])
         job_row = next(row for row in self.client.rows["alumni_output"] if row["record_id"] == job["id"])
         for row in (account_row, job_row):
-            self.assertEqual(row["fields"]["填写人与职位"], "李四 · HR")
-            self.assertEqual(row["fields"]["公司介绍"], "更新后的公司介绍")
-        with self.assertRaisesRegex(ValueError, "联系人"):
-            portal_data.save_alumni_company(owner, "NVIDIA", "", "介绍")
+            self.assertEqual(row["fields"]["填写人姓名"], "李四")
+            self.assertEqual(row["fields"]["填写人职务"], "HR")
+            self.assertNotIn("填写人与职位", row["fields"])
+        with self.assertRaisesRegex(ValueError, "姓名"):
+            portal_data.save_alumni_company(owner, "NVIDIA", "", "HR")
+        with self.assertRaisesRegex(ValueError, "职务"):
+            portal_data.save_alumni_company(owner, "NVIDIA", "李四", "")
+
+    def test_legacy_combined_contact_is_copied_whole_into_name(self):
+        owner = portal_data.register("alumni", "13800138000", "abcde")
+        row = self.client.rows["alumni_output"][0]
+        row["fields"]["填写人与职位"] = "Jack1  CEO"
+        view = portal_data.account_data(owner)
+        self.assertEqual(view["contact_name"], "Jack1  CEO")
+        self.assertEqual(view["contact_role"], "")
 
     def test_schema_is_idempotent(self):
         self.assertEqual(portal_data.ensure_schema(), {"candidate_output": [], "alumni_output": []})
 
+    def test_job_schema_uses_feishu_choice_and_date_fields(self):
+        fields = {item["field_name"]: item for item in self.client.fields["alumni_output"]}
+        self.assertEqual(fields[portal_data.JOB_LOCATION_FIELD]["type"], 1)
+        self.assertEqual(fields[portal_data.JOB_ATTENDANCE_FIELD]["type"], 3)
+        self.assertEqual(
+            [item["name"] for item in fields[portal_data.JOB_ATTENDANCE_FIELD]["property"]["options"]],
+            list(portal_data.JOB_ATTENDANCE_OPTIONS),
+        )
+        self.assertEqual(fields[portal_data.JOB_CATEGORY_FIELD]["type"], 4)
+        self.assertEqual(
+            [item["name"] for item in fields[portal_data.JOB_CATEGORY_FIELD]["property"]["options"]],
+            list(portal_data.JOB_CATEGORY_OPTIONS),
+        )
+        self.assertEqual(fields[portal_data.JOB_MIN_DAYS_FIELD]["type"], 3)
+        self.assertEqual(fields[portal_data.JOB_LATEST_ARRIVAL_FIELD]["type"], 5)
+
+    def test_job_required_fields_and_date_round_trip(self):
+        owner = portal_data.register("alumni", "13800138000", "abcde")
+        portal_data.save_alumni_company(owner, "测试企业", "张三", "HR")
+        invalid = dict(JOB_ARGS)
+        invalid["work_location"] = ""
+        with self.assertRaisesRegex(ValueError, "必填"):
+            portal_data.save_job(owner, title="产品经理", body="负责产品设计", **invalid)
+        job = portal_data.save_job(
+            owner, title="产品经理", body="负责产品设计", latest_arrival_date="2026-12-08", **JOB_ARGS
+        )
+        row = next(item for item in self.client.rows["alumni_output"] if item["record_id"] == job["id"])
+        self.assertIsInstance(row["fields"][portal_data.JOB_LATEST_ARRIVAL_FIELD], int)
+        listed = portal_data.list_jobs(owner)[0]
+        self.assertEqual(listed["latest_arrival_date"], "2026-12-08")
+        self.assertEqual(listed["job_categories"], JOB_ARGS["job_categories"])
+        self.assertEqual(listed["attendance_mode"], JOB_ARGS["attendance_mode"])
+
     def test_legacy_feishu_recommendation_is_copied_locally_without_writing_back(self):
         self.client.fields["alumni_output"].extend({"field_name": name, "type": 1} for name in ("AR_候选人ID", "AR_候选人姓名", "AR_星级", "AR_流程状态", "AR_评估理由", "AR_候选人资料", "AR_意向反馈"))
         owner = portal_data.register("alumni", "13800138000", "abcde")
-        portal_data.save_alumni_company(owner, "测试企业")
-        job = portal_data.save_job(owner, title="产品经理", body="产品设计")
+        portal_data.save_alumni_company(owner, "测试企业", "张三", "HR")
+        job = portal_data.save_job(owner, title="产品经理", body="产品设计", **JOB_ARGS)
         legacy = self.client.request("POST", "/alumni_output/records", body={"fields": {"AR_记录类型": "recommendation", "AR_账户ID": owner["id"], "AR_来源JD": job["id"] + ":2:hash", "AR_候选人ID": "recCandidate01", "AR_候选人姓名": "候选人", "AR_星级": "4", "AR_流程状态": "待反馈"}})["record"]
         writes_before = len(self.client.writes)
         self.assertEqual(portal_data.list_recommendations(owner)[0]["id"], legacy["record_id"])
@@ -252,8 +304,8 @@ class PortalDataTests(unittest.TestCase):
 
     def test_low_star_manual_publication_is_idempotent_and_respects_pause(self):
         owner = portal_data.register("alumni", "13800138000", "abcde")
-        portal_data.save_alumni_company(owner, "测试企业")
-        job = portal_data.save_job(owner, title="产品经理", body="负责产品设计")
+        portal_data.save_alumni_company(owner, "测试企业", "张三", "HR")
+        job = portal_data.save_job(owner, title="产品经理", body="负责产品设计", latest_arrival_date="2026-12-08", **JOB_ARGS)
         candidate = portal_data.register("candidate", "13900139000", "abcde")
         portal_data.save_candidate(candidate, name="张三", description="产品经历")
         source = job["id"] + ":2:hash"
@@ -268,14 +320,14 @@ class PortalDataTests(unittest.TestCase):
             portal_data.save_candidate(candidate, enabled=False)
             self.assertEqual(portal_data.publish_recommendation(source, candidate["id"], 4, "适合", "负责产品设计")["reason"], "候选人已停止推荐")
             portal_data.save_candidate(candidate, enabled=True)
-            portal_data.save_job(owner, record_id=job["id"], title="产品经理", body="负责产品设计", enabled=False)
+            portal_data.update_job_status(owner, job["id"], False)
             self.assertEqual(portal_data.publish_recommendation(source, candidate["id"], 4, "适合", "负责产品设计")["reason"], "这条 JD 已停止招聘")
 
     def test_business_outcomes_sync_to_both_ar_tables_and_jobs_show_company(self):
         owner = portal_data.register("alumni", "13800138000", "abcde")
-        portal_data.save_alumni_company(owner, "NVIDIA")
-        first = portal_data.save_job(owner, title="产品经理", body="产品设计")
-        second = portal_data.save_job(owner, title="运营", body="用户运营")
+        portal_data.save_alumni_company(owner, "NVIDIA", "张三", "HR")
+        first = portal_data.save_job(owner, title="产品经理", body="产品设计", **JOB_ARGS)
+        second = portal_data.save_job(owner, title="运营", body="用户运营", **JOB_ARGS)
         candidate = portal_data.register("candidate", "13900139000", "abcde")
         portal_data.save_candidate(candidate, name="张三")
         with patch("match_engine._candidate_label", return_value="张三"), patch("match_engine._job_text", return_value="产品设计"), patch("match_engine.candidate_profile", return_value="求职资料"):
@@ -298,12 +350,17 @@ class PortalDataTests(unittest.TestCase):
         self.assertNotIn(second["id"], candidate_row["fields"]["AR_录用JD"])
         first_row = next(row for row in self.client.rows["alumni_output"] if row["record_id"] == first["id"])
         self.assertIn("张三", first_row["fields"]["AR_已录用候选人"])
+        portal_data.feedback(owner, rec["id"], "未录用")
+        self.assertEqual(candidate_row["fields"].get("AR_录用JD", ""), "")
+        self.assertEqual(first_row["fields"].get("AR_已录用候选人", ""), "")
+        portal_data.feedback(owner, rec["id"], "录用")
+        self.assertIn(first["id"], candidate_row["fields"]["AR_录用JD"])
         self.assertEqual(portal_data.sync_business_outcomes(), {"candidate_output": 0, "alumni_output": 0})
 
     def test_negative_feedback_blocks_recommendation_after_jd_revision(self):
         owner = portal_data.register("alumni", "13800138000", "abcde")
-        portal_data.save_alumni_company(owner, "测试企业")
-        job = portal_data.save_job(owner, title="产品经理", body="产品设计")
+        portal_data.save_alumni_company(owner, "测试企业", "张三", "HR")
+        job = portal_data.save_job(owner, title="产品经理", body="产品设计", **JOB_ARGS)
         candidate = portal_data.register("candidate", "13900139000", "abcde")
         with patch("match_engine._candidate_label", return_value="张三"), patch("match_engine._job_text", return_value="产品设计"), patch("match_engine.candidate_profile", return_value="求职资料"):
             first = portal_data.publish_recommendation(job["id"] + ":2:old", candidate["id"], 3, "适合", "产品设计")

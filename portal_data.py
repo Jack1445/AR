@@ -10,12 +10,13 @@ import re
 import secrets
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ar import Client, FeishuError, identifiers, table_path
 from build_web import ROOT, TABLES
 from credentials import get_credentials
 import recommendation_store
+import portal_store
 
 
 WRITE_LOCK = threading.RLock()
@@ -26,7 +27,25 @@ class MpLoginError(ValueError):
         super().__init__(message)
 PREFIX = "AR_"
 CANDIDATE_FIELDS = ["AR_记录类型", "AR_手机号", "AR_密码摘要", "AR_MP用户ID", "AR_姓名", "AR_简历说明", "AR_推荐状态", "AR_来源记录ID", "AR_更新时间", "AR_提交状态", "AR_已推荐JD", "AR_录用JD"]
-ALUMNI_FIELDS = ["AR_记录类型", "AR_手机号", "AR_密码摘要", "AR_MP用户ID", "AR_账户ID", "AR_企业名称", "AR_联系人手机号", "AR_岗位名称", "AR_JD正文", "AR_招聘状态", "AR_来源JD", "AR_已录用候选人", "AR_更新时间"]
+ALUMNI_CONTACT_NAME_FIELD = "填写人姓名"
+ALUMNI_CONTACT_ROLE_FIELD = "填写人职务"
+LEGACY_ALUMNI_CONTACT_FIELD = "填写人与职位"
+ALUMNI_FIELDS = ["AR_记录类型", "AR_手机号", "AR_密码摘要", "AR_MP用户ID", "AR_账户ID", "AR_企业名称", "AR_联系人手机号", "AR_岗位名称", "AR_JD正文", "AR_招聘状态", "AR_来源JD", "AR_已录用候选人", "AR_更新时间", ALUMNI_CONTACT_NAME_FIELD, ALUMNI_CONTACT_ROLE_FIELD]
+JOB_LOCATION_FIELD = "工作地点"
+JOB_ATTENDANCE_FIELD = "出勤方式"
+JOB_CATEGORY_FIELD = "岗位类别"
+JOB_MIN_DAYS_FIELD = "每周最少到岗天数"
+JOB_LATEST_ARRIVAL_FIELD = "最晚到岗日期"
+JOB_ATTENDANCE_OPTIONS = ("线上", "线下", "线上线下结合")
+JOB_CATEGORY_OPTIONS = ("日常实习", "可转正", "校招", "社职")
+JOB_MIN_DAYS_OPTIONS = ("1天", "2天", "3天", "4天", "5天")
+JOB_FIELD_SPECS = {
+    JOB_LOCATION_FIELD: {"type": 1},
+    JOB_ATTENDANCE_FIELD: {"type": 3, "property": {"options": [{"name": value} for value in JOB_ATTENDANCE_OPTIONS]}},
+    JOB_CATEGORY_FIELD: {"type": 4, "property": {"options": [{"name": value} for value in JOB_CATEGORY_OPTIONS]}},
+    JOB_MIN_DAYS_FIELD: {"type": 3, "property": {"options": [{"name": value} for value in JOB_MIN_DAYS_OPTIONS]}},
+    JOB_LATEST_ARRIVAL_FIELD: {"type": 5},
+}
 CANDIDATE_NAME_FIELD = "姓名"
 CANDIDATE_PHONE_FIELD = "手机号/微信号"
 SOURCE_CANDIDATE_NAME_FIELD = "姓名"
@@ -42,6 +61,11 @@ REQUIRED_CANDIDATE_FIELDS = {
     CONSENT_FIELD,
 }
 ALLOWED_WRITES = {"candidate_output", "alumni_output"}
+HIDDEN_CANDIDATE_FIELDS = {"来源"}
+
+
+def _visible_candidate_schema(schema: list[dict]) -> list[dict]:
+    return [item for item in schema if item.get("name") not in HIDDEN_CANDIDATE_FIELDS]
 
 
 def _table(kind: str) -> str:
@@ -82,20 +106,33 @@ def _field(record: dict, name: str) -> str:
 
 def candidate_form_schema(client: Client, app_token: str) -> list[dict]:
     """Describe current Feishu columns that a candidate may see or edit."""
+    stale = None
+    if portal_store.enabled():
+        cached = portal_store.get_schema("candidate_output")
+        if cached is not None:
+            return _visible_candidate_schema(cached)
+        stale = portal_store.get_schema("candidate_output", max_age_seconds=None)
     schema = []
-    for field in client.pages(_path(app_token, "candidate_output") + "/fields"):
-        name, kind = field.get("field_name", ""), field.get("type")
-        if not name or name.startswith(PREFIX) or name == CONSENT_OTHER_FIELD or kind not in {1, 3, 4, 5, 17}:
-            continue
-        properties = field.get("property") or {}
-        options = [item["name"] for item in properties.get("options", []) if item.get("name")]
-        if name == CONSENT_FIELD:
-            options = [option for option in options if option != "其他"]
-        schema.append({"name": name, "type": kind,
-                       "options": options,
-                       "required": name in REQUIRED_CANDIDATE_FIELDS,
-                       "readonly": name == CANDIDATE_PHONE_FIELD or bool(properties.get("auto_fill"))})
-    return schema
+    try:
+        for field in client.pages(_path(app_token, "candidate_output") + "/fields"):
+            name, kind = field.get("field_name", ""), field.get("type")
+            if not name or name.startswith(PREFIX) or name in HIDDEN_CANDIDATE_FIELDS or name == CONSENT_OTHER_FIELD or kind not in {1, 3, 4, 5, 17}:
+                continue
+            properties = field.get("property") or {}
+            options = [item["name"] for item in properties.get("options", []) if item.get("name")]
+            if name == CONSENT_FIELD:
+                options = [option for option in options if option != "其他"]
+            schema.append({"name": name, "type": kind,
+                           "options": options,
+                           "required": name in REQUIRED_CANDIDATE_FIELDS,
+                           "readonly": name == CANDIDATE_PHONE_FIELD or bool(properties.get("auto_fill"))})
+    except Exception:
+        if stale is not None:
+            return stale
+        raise
+    if portal_store.enabled():
+        portal_store.save_schema("candidate_output", schema)
+    return _visible_candidate_schema(schema)
 
 
 def _now() -> str:
@@ -103,38 +140,58 @@ def _now() -> str:
 
 
 def _records(client: Client, app_token: str, kind: str) -> list[dict]:
-    return list(client.pages(_path(app_token, kind) + "/records"))
+    if portal_store.enabled() and kind in ALLOWED_WRITES:
+        local = portal_store.list_records(kind)
+        if local:
+            return [{"record_id": row["local_id"], "fields": dict(row["fields"])} for row in local]
+    records = list(client.pages(_path(app_token, kind) + "/records"))
+    if portal_store.enabled() and kind in ALLOWED_WRITES:
+        for record in records:
+            portal_store.mirror_record(kind, record)
+    return records
 
 
 def _record(client: Client, app_token: str, kind: str, record_id: str) -> dict:
-    if not re.fullmatch(r"rec[A-Za-z0-9]+", record_id):
+    if not re.fullmatch(r"(?:rec|local_)[A-Za-z0-9]+", record_id):
         raise ValueError("记录 ID 无效")
+    if portal_store.enabled() and kind in ALLOWED_WRITES:
+        local = portal_store.get_record(kind, record_id)
+        if local:
+            return {"record_id": local["local_id"], "fields": dict(local["fields"])}
     value = client.request("GET", _path(app_token, kind) + "/records/" + record_id).get("record")
     if not value:
         raise ValueError("记录不存在")
+    if portal_store.enabled() and kind in ALLOWED_WRITES:
+        portal_store.mirror_record(kind, value)
     return value
 
 
 def _create(client: Client, app_token: str, kind: str, fields: dict) -> dict:
     if kind not in ALLOWED_WRITES:
         raise ValueError("写入目标无效")
-    return client.request("POST", _path(app_token, kind) + "/records", body={"fields": fields})["record"]
+    record = client.request("POST", _path(app_token, kind) + "/records", body={"fields": fields})["record"]
+    if portal_store.enabled():
+        portal_store.mirror_record(kind, record)
+    return record
 
 
 def _update(client: Client, app_token: str, kind: str, record_id: str, fields: dict) -> dict:
     if kind not in ALLOWED_WRITES:
         raise ValueError("写入目标无效")
-    return client.request("PUT", _path(app_token, kind) + "/records/" + record_id, body={"fields": fields})["record"]
+    record = client.request("PUT", _path(app_token, kind) + "/records/" + record_id, body={"fields": fields})["record"]
+    if portal_store.enabled():
+        portal_store.mirror_record(kind, record, partial=True)
+    return record
 
 
 def ensure_schema() -> dict:
-    """Idempotently create only text columns in the two AR output tables."""
+    """Idempotently create the portal columns in the two AR output tables."""
     client, app_token = _client()
     result = {}
     with WRITE_LOCK:
         for kind, required in (("candidate_output", CANDIDATE_FIELDS), ("alumni_output", ALUMNI_FIELDS)):
             existing = {item["field_name"]: item for item in client.pages(_path(app_token, kind) + "/fields")}
-            base_fields = {CANDIDATE_NAME_FIELD: 1, CANDIDATE_PHONE_FIELD: 1, "简历": 17} if kind == "candidate_output" else {"公司名称（对外展示的名称）": 1, "填写人与职位": 1, "公司介绍": 1}
+            base_fields = {CANDIDATE_NAME_FIELD: 1, CANDIDATE_PHONE_FIELD: 1, "简历": 17} if kind == "candidate_output" else {"公司名称（对外展示的名称）": 1, "公司介绍": 1}
             missing_base = [name for name, field_type in base_fields.items() if name not in existing or existing[name].get("type") != field_type]
             if missing_base:
                 raise ValueError(f"{kind} 缺少预期字段或类型不符：{', '.join(missing_base)}。请按飞书最新字段名更新门户映射")
@@ -147,6 +204,14 @@ def ensure_schema() -> dict:
                     client.request("POST", _path(app_token, kind) + "/fields", body={"field_name": name, "type": 1})
                     created.append(name)
                     time.sleep(0.16)
+            if kind == "alumni_output":
+                for name, spec in JOB_FIELD_SPECS.items():
+                    if name in existing and existing[name].get("type") != spec["type"]:
+                        raise ValueError(f"alumni_output 中字段类型不符：{name}")
+                    if name not in existing:
+                        client.request("POST", _path(app_token, kind) + "/fields", body={"field_name": name, **spec})
+                        created.append(name)
+                        time.sleep(0.16)
             result[kind] = created
     return result
 
@@ -246,12 +311,32 @@ def login_with_mp(role: str, subject: str, phone: str) -> dict:
         return {"id": record["record_id"], "role": role, "phone": phone}
 
 
+def _split_legacy_contact(value: str) -> tuple[str, str]:
+    return str(value or "").strip(), ""
+
+
+def greeting_name(value: str) -> str:
+    """Format the welcome-name deterministically; stored contact data is unchanged."""
+    name = str(value or "").strip()
+    chinese = re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", name)
+    if not chinese:
+        return name
+    try:
+        from pypinyin import Style, lazy_pinyin
+        text = "".join(lazy_pinyin("".join(chinese[-2:]), style=Style.NORMAL, errors="default", strict=False))
+    except ImportError:
+        return name
+    return text[:1].upper() + text[1:].lower() if text else name
+
+
 def account_data(identity: dict) -> dict:
     client, app_token = _client()
     row = _record(client, app_token, _kind(identity["role"]), identity["id"])
     if _field(row, "AR_记录类型") != "account" or _field(row, "AR_手机号") != identity["phone"]:
         raise ValueError("账户已失效")
     fields = row.get("fields") or {}
+    local = portal_store.get_record(_kind(identity["role"]), identity["id"]) if portal_store.enabled() else None
+    sync = {"status": local["sync_state"], "error": local["last_error"], "attempts": local["attempts"]} if local else {"status": "synced", "error": "", "attempts": 0}
     if identity["role"] == "candidate":
         files = fields.get("简历") or []
         schema = candidate_form_schema(client, app_token)
@@ -259,8 +344,14 @@ def account_data(identity: dict) -> dict:
         values[CANDIDATE_PHONE_FIELD] = identity["phone"]
         status = _field(row, "AR_提交状态")
         submitted = status == "已提交" or (status != "草稿" and all(bool(values.get(item["name"])) for item in schema if item["required"]))
-        return {"role": "candidate", "phone": identity["phone"], "name": _field(row, "AR_姓名") or _field(row, CANDIDATE_NAME_FIELD), "description": _field(row, "AR_简历说明"), "enabled": _field(row, "AR_推荐状态") != "停止", "files": [{"name": item.get("name", "简历"), "index": index} for index, item in enumerate(files) if isinstance(item, dict)], "schema": schema, "values": values, "submitted": submitted}
-    return {"role": "alumni", "phone": identity["phone"], "company": _field(row, "AR_企业名称"), "contact_title": _field(row, "填写人与职位"), "introduction": _field(row, "公司介绍")}
+        return {"role": "candidate", "phone": identity["phone"], "name": _field(row, "AR_姓名") or _field(row, CANDIDATE_NAME_FIELD), "description": _field(row, "AR_简历说明"), "enabled": _field(row, "AR_推荐状态") != "停止", "files": [{"name": item.get("name", "简历"), "index": index} for index, item in enumerate(files) if isinstance(item, dict)], "schema": schema, "values": values, "submitted": submitted, "sync": sync}
+    contact_name = _field(row, ALUMNI_CONTACT_NAME_FIELD)
+    contact_role = _field(row, ALUMNI_CONTACT_ROLE_FIELD)
+    if not contact_name or not contact_role:
+        legacy_name, legacy_role = _split_legacy_contact(_field(row, LEGACY_ALUMNI_CONTACT_FIELD))
+        contact_name = contact_name or legacy_name
+        contact_role = contact_role or legacy_role
+    return {"role": "alumni", "phone": identity["phone"], "company": _field(row, "AR_企业名称"), "contact_name": contact_name, "display_name": greeting_name(contact_name), "contact_role": contact_role, "contact_title": " · ".join(filter(None, (contact_name, contact_role))), "introduction": _field(row, "公司介绍"), "sync": sync}
 
 
 def save_candidate(identity: dict, *, name: str | None = None, description: str | None = None, enabled: bool | None = None, form_fields: dict | None = None, draft: bool = False) -> dict:
@@ -329,7 +420,10 @@ def save_candidate(identity: dict, *, name: str | None = None, description: str 
                     if value is None or value == "" or value == []:
                         raise ValueError(f"请填写{required_name}")
                 fields["AR_提交状态"] = "已提交"
-        _update(client, app_token, "candidate_output", identity["id"], fields)
+        if portal_store.enabled():
+            portal_store.merge_fields("candidate_output", identity["id"], fields)
+        else:
+            _update(client, app_token, "candidate_output", identity["id"], fields)
     return account_data(identity)
 
 
@@ -346,27 +440,38 @@ def remove_candidate_attachment(identity: dict, field_name: str, index: int) -> 
         if not 0 <= index < len(files):
             raise ValueError("附件不存在")
         remaining = [{"file_token": item["file_token"]} for position, item in enumerate(files) if position != index and isinstance(item, dict) and item.get("file_token")]
-        _update(client, app_token, "candidate_output", identity["id"], {field_name: remaining, "AR_更新时间": _now()})
+        updates = {field_name: remaining, "AR_更新时间": _now()}
+        if portal_store.enabled():
+            portal_store.merge_fields("candidate_output", identity["id"], updates)
+        else:
+            _update(client, app_token, "candidate_output", identity["id"], updates)
     return account_data(identity)
 
 
-def save_alumni_company(identity: dict, company: str, contact_title: str | None = None, introduction: str | None = None) -> dict:
+def save_alumni_company(identity: dict, company: str, contact_name: str | None = None, contact_role: str | None = None) -> dict:
     if identity["role"] != "alumni" or not isinstance(company, str) or not 1 <= len(company.strip()) <= 120:
         raise ValueError("请输入企业名称")
-    if contact_title is not None and (not isinstance(contact_title, str) or not 1 <= len(contact_title.strip()) <= 500):
-        raise ValueError("请填写联系人信息与职位（最多 500 字）")
-    if introduction is not None and (not isinstance(introduction, str) or not 1 <= len(introduction.strip()) <= 5000):
-        raise ValueError("请填写公司介绍（最多 5000 字）")
     client, app_token = _client()
     with WRITE_LOCK:
         current = account_data(identity)
-        contact_title = current["contact_title"] if contact_title is None else contact_title.strip()
-        introduction = current["introduction"] if introduction is None else introduction.strip()
-        fields = {"AR_企业名称": company.strip(), "公司名称（对外展示的名称）": company.strip(), "填写人与职位": contact_title, "公司介绍": introduction, "AR_更新时间": _now()}
-        _update(client, app_token, "alumni_output", identity["id"], fields)
+        contact_name = current["contact_name"] if contact_name is None else str(contact_name).strip()
+        contact_role = current["contact_role"] if contact_role is None else str(contact_role).strip()
+        if not 1 <= len(contact_name) <= 120:
+            raise ValueError("请填写你的姓名（最多 120 字）")
+        if not 1 <= len(contact_role) <= 120:
+            raise ValueError("请填写你的职务（最多 120 字）")
+        fields = {"AR_企业名称": company.strip(), "公司名称（对外展示的名称）": company.strip(), ALUMNI_CONTACT_NAME_FIELD: contact_name, ALUMNI_CONTACT_ROLE_FIELD: contact_role, "AR_更新时间": _now()}
+        if portal_store.enabled():
+            portal_store.merge_fields("alumni_output", identity["id"], fields)
+        else:
+            _update(client, app_token, "alumni_output", identity["id"], fields)
         for row in _records(client, app_token, "alumni_output"):
             if _field(row, "AR_记录类型") == "job" and _field(row, "AR_账户ID") == identity["id"]:
-                _update(client, app_token, "alumni_output", row["record_id"], {"AR_企业名称": company.strip(), "公司名称（对外展示的名称）": company.strip(), "AR_联系人手机号": identity["phone"], "填写人与职位": contact_title, "公司介绍": introduction})
+                updates = {"AR_企业名称": company.strip(), "公司名称（对外展示的名称）": company.strip(), "AR_联系人手机号": identity["phone"], ALUMNI_CONTACT_NAME_FIELD: contact_name, ALUMNI_CONTACT_ROLE_FIELD: contact_role}
+                if portal_store.enabled():
+                    portal_store.merge_fields("alumni_output", row["record_id"], updates)
+                else:
+                    _update(client, app_token, "alumni_output", row["record_id"], updates)
     return account_data(identity)
 
 
@@ -374,27 +479,120 @@ def list_jobs(identity: dict) -> list[dict]:
     if identity["role"] != "alumni":
         raise ValueError("账户类型无效")
     client, app_token = _client()
-    return [{"id": row["record_id"], "title": _field(row, "AR_岗位名称"), "body": _field(row, "AR_JD正文"), "enabled": _field(row, "AR_招聘状态") != "停止", "source_id": _field(row, "AR_来源JD")} for row in _records(client, app_token, "alumni_output") if _field(row, "AR_记录类型") == "job" and _field(row, "AR_账户ID") == identity["id"]]
+    jobs = [{
+        "id": row["record_id"], "title": _field(row, "AR_岗位名称"), "body": _field(row, "AR_JD正文"),
+        "enabled": _field(row, "AR_招聘状态") != "停止", "source_id": _field(row, "AR_来源JD"),
+        "work_location": _field(row, JOB_LOCATION_FIELD), "attendance_mode": _field(row, JOB_ATTENDANCE_FIELD),
+        "job_categories": list((row.get("fields") or {}).get(JOB_CATEGORY_FIELD) or []),
+        "min_days_per_week": _field(row, JOB_MIN_DAYS_FIELD),
+        "latest_arrival_date": _job_date_text((row.get("fields") or {}).get(JOB_LATEST_ARRIVAL_FIELD)),
+    } for row in _records(client, app_token, "alumni_output") if _field(row, "AR_记录类型") == "job" and _field(row, "AR_账户ID") == identity["id"]]
+    if portal_store.enabled():
+        saved_order = portal_store.get_preference(identity["id"], "job_order", [])
+        if isinstance(saved_order, list):
+            positions = {record_id: index for index, record_id in enumerate(saved_order) if isinstance(record_id, str)}
+            jobs = [item[1] for item in sorted(enumerate(jobs), key=lambda item: (positions.get(item[1]["id"], len(positions) + item[0]), item[0]))]
+    return jobs
 
 
-def save_job(identity: dict, *, record_id: str = "", title: str, body: str, enabled: bool = True) -> dict:
-    if identity["role"] != "alumni" or not isinstance(title, str) or not isinstance(body, str) or not 1 <= len(title.strip()) <= 120 or not 1 <= len(body.strip()) <= 12000 or type(enabled) is not bool:
-        raise ValueError("请填写岗位名称和 JD 正文")
+def save_job_order(identity: dict, job_ids: list[str]) -> dict:
+    if identity["role"] != "alumni" or not portal_store.enabled():
+        raise ValueError("岗位顺序只能保存在本地数据库")
+    if not isinstance(job_ids, list) or len(job_ids) > 500 or any(not isinstance(value, str) for value in job_ids):
+        raise ValueError("岗位顺序无效")
+    order = list(dict.fromkeys(job_ids))
+    client, app_token = _client()
+    owned = {row["record_id"] for row in _records(client, app_token, "alumni_output")
+             if _field(row, "AR_记录类型") == "job" and _field(row, "AR_账户ID") == identity["id"]}
+    if any(record_id not in owned for record_id in order):
+        raise ValueError("岗位顺序包含无权访问的岗位")
+    portal_store.save_preference(identity["id"], "job_order", order)
+    return {"job_ids": order}
+
+
+def _job_date_value(value: str) -> int | None:
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise ValueError("最晚到岗日期格式无效")
+    try:
+        date = datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone(timedelta(hours=8)))
+    except ValueError as error:
+        raise ValueError("最晚到岗日期格式无效") from error
+    return int(date.timestamp() * 1000)
+
+
+def _job_date_text(value) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        timestamp = int(value)
+        if timestamp < 10_000_000_000:
+            timestamp *= 1000
+        return datetime.fromtimestamp(timestamp / 1000, timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+    except (TypeError, ValueError, OSError):
+        return ""
+
+
+def save_job(identity: dict, *, record_id: str = "", title: str, body: str, work_location: str,
+             attendance_mode: str, job_categories: list[str], min_days_per_week: str,
+             latest_arrival_date: str = "", enabled: bool = True) -> dict:
+    valid = (
+        identity["role"] == "alumni"
+        and isinstance(title, str) and 1 <= len(title.strip()) <= 120
+        and isinstance(body, str) and 1 <= len(body.strip()) <= 12000
+        and isinstance(work_location, str) and 1 <= len(work_location.strip()) <= 200
+        and attendance_mode in JOB_ATTENDANCE_OPTIONS
+        and isinstance(job_categories, list) and bool(job_categories)
+        and all(isinstance(value, str) and value in JOB_CATEGORY_OPTIONS for value in job_categories)
+        and min_days_per_week in JOB_MIN_DAYS_OPTIONS
+        and type(enabled) is bool
+    )
+    if not valid:
+        raise ValueError("请完整填写所有岗位必填信息")
+    categories = list(dict.fromkeys(job_categories))
+    latest_date = _job_date_value(latest_arrival_date)
     client, app_token = _client()
     account = account_data(identity)
-    if not account["company"]:
-        raise ValueError("请先填写企业名称")
-    fields = {"AR_岗位名称": title.strip(), "AR_JD正文": body.strip(), "AR_招聘状态": "招聘中" if enabled else "停止", "AR_更新时间": _now(), "AR_企业名称": account["company"], "公司名称（对外展示的名称）": account["company"], "AR_联系人手机号": identity["phone"], "填写人与职位": account["contact_title"], "公司介绍": account["introduction"]}
+    if not account["company"] or not account["contact_name"] or not account["contact_role"]:
+        raise ValueError("请先完善企业名称、姓名和职务")
+    fields = {"AR_岗位名称": title.strip(), "AR_JD正文": body.strip(), "AR_招聘状态": "招聘中" if enabled else "停止", "AR_更新时间": _now(), "AR_企业名称": account["company"], "公司名称（对外展示的名称）": account["company"], "AR_联系人手机号": identity["phone"], ALUMNI_CONTACT_NAME_FIELD: account["contact_name"], ALUMNI_CONTACT_ROLE_FIELD: account["contact_role"], "公司介绍": account["introduction"], JOB_LOCATION_FIELD: work_location.strip(), JOB_ATTENDANCE_FIELD: attendance_mode, JOB_CATEGORY_FIELD: categories, JOB_MIN_DAYS_FIELD: min_days_per_week, JOB_LATEST_ARRIVAL_FIELD: latest_date}
     with WRITE_LOCK:
         if record_id:
             existing = _record(client, app_token, "alumni_output", record_id)
             if _field(existing, "AR_记录类型") != "job" or _field(existing, "AR_账户ID") != identity["id"]:
                 raise ValueError("无权修改这条 JD")
-            result = _update(client, app_token, "alumni_output", record_id, fields)
+            if portal_store.enabled():
+                result = {"record_id": record_id, "fields": portal_store.merge_fields("alumni_output", record_id, fields)["fields"]}
+            else:
+                result = _update(client, app_token, "alumni_output", record_id, fields)
         else:
             fields.update({"AR_记录类型": "job", "AR_账户ID": identity["id"]})
-            result = _create(client, app_token, "alumni_output", fields)
-    return {"id": result["record_id"], "title": title.strip(), "body": body.strip(), "enabled": enabled}
+            if portal_store.enabled():
+                local = portal_store.create_record("alumni_output", fields)
+                result = {"record_id": local["local_id"], "fields": local["fields"]}
+            else:
+                result = _create(client, app_token, "alumni_output", fields)
+    return {"id": result["record_id"], "title": title.strip(), "body": body.strip(), "enabled": enabled,
+            "work_location": work_location.strip(), "attendance_mode": attendance_mode,
+            "job_categories": categories, "min_days_per_week": min_days_per_week,
+            "latest_arrival_date": latest_arrival_date or ""}
+
+
+def update_job_status(identity: dict, record_id: str, enabled: bool) -> dict:
+    if identity["role"] != "alumni" or type(enabled) is not bool:
+        raise ValueError("岗位状态无效")
+    client, app_token = _client()
+    with WRITE_LOCK:
+        existing = _record(client, app_token, "alumni_output", record_id)
+        if _field(existing, "AR_记录类型") != "job" or _field(existing, "AR_账户ID") != identity["id"]:
+            raise ValueError("无权修改这条 JD")
+        fields = {"AR_招聘状态": "招聘中" if enabled else "停止", "AR_更新时间": _now()}
+        if portal_store.enabled():
+            portal_store.merge_fields("alumni_output", record_id, fields)
+        else:
+            _update(client, app_token, "alumni_output", record_id, fields)
+    return {"id": record_id, "enabled": enabled}
 
 
 def list_recommendations(identity: dict) -> list[dict]:
@@ -442,7 +640,11 @@ def migrate_legacy_recommendations(rows: list[dict] | None = None) -> None:
 def sync_business_outcomes() -> dict:
     """Rebuild useful Feishu summaries from the local per-JD process history."""
     with WRITE_LOCK:
-        ensure_schema()
+        # The portal startup validates the remote schema once. User actions must
+        # not wait for Feishu: in local-primary mode this method only updates the
+        # durable PostgreSQL mirror and wakes the background sync worker.
+        if not portal_store.enabled():
+            ensure_schema()
         client, app_token = _client()
         alumni_rows = _records(client, app_token, "alumni_output")
         candidate_rows = _records(client, app_token, "candidate_output")
@@ -474,19 +676,26 @@ def sync_business_outcomes() -> dict:
             if account:
                 company = _field(account, "AR_企业名称") or _field(account, "公司名称（对外展示的名称）")
                 phone = _field(account, "AR_手机号")
-                for field, value in (("AR_企业名称", company), ("公司名称（对外展示的名称）", company), ("AR_联系人手机号", phone), ("填写人与职位", _field(account, "填写人与职位")), ("公司介绍", _field(account, "公司介绍"))):
+                contact_name = _field(account, ALUMNI_CONTACT_NAME_FIELD)
+                contact_role = _field(account, ALUMNI_CONTACT_ROLE_FIELD)
+                if not contact_name or not contact_role:
+                    legacy_name, legacy_role = _split_legacy_contact(_field(account, LEGACY_ALUMNI_CONTACT_FIELD))
+                    contact_name, contact_role = contact_name or legacy_name, contact_role or legacy_role
+                for field, value in (("AR_企业名称", company), ("公司名称（对外展示的名称）", company), ("AR_联系人手机号", phone), (ALUMNI_CONTACT_NAME_FIELD, contact_name), (ALUMNI_CONTACT_ROLE_FIELD, contact_role), ("公司介绍", _field(account, "公司介绍"))):
                     if value and _field(row, field) != value:
                         updates[field] = value
-            if row["record_id"] in by_job:
-                labels = []
-                for candidate in by_job[row["record_id"]].values():
-                    name = _field(candidate, "AR_姓名") or _field(candidate, CANDIDATE_NAME_FIELD) or "候选人"
-                    labels.append(f"{name}（{candidate['record_id']}）")
-                hired = "\n".join(sorted(labels))
-                if _field(row, "AR_已录用候选人") != hired:
-                    updates["AR_已录用候选人"] = hired
+            labels = []
+            for candidate in by_job.get(row["record_id"], {}).values():
+                name = _field(candidate, "AR_姓名") or _field(candidate, CANDIDATE_NAME_FIELD) or "候选人"
+                labels.append(f"{name}（{candidate['record_id']}）")
+            hired = "\n".join(sorted(labels))
+            if _field(row, "AR_已录用候选人") != hired:
+                updates["AR_已录用候选人"] = hired
             if updates:
-                _update(client, app_token, "alumni_output", row["record_id"], updates)
+                if portal_store.enabled():
+                    portal_store.merge_fields("alumni_output", row["record_id"], updates)
+                else:
+                    _update(client, app_token, "alumni_output", row["record_id"], updates)
                 changed["alumni_output"] += 1
 
         for candidate_id, entries in by_candidate.items():
@@ -506,7 +715,10 @@ def sync_business_outcomes() -> dict:
                 if _field(row, field) != value:
                     updates[field] = value
             if updates:
-                _update(client, app_token, "candidate_output", candidate_id, updates)
+                if portal_store.enabled():
+                    portal_store.merge_fields("candidate_output", candidate_id, updates)
+                else:
+                    _update(client, app_token, "candidate_output", candidate_id, updates)
                 changed["candidate_output"] += 1
         return changed
 
@@ -555,13 +767,19 @@ def import_existing(identity: dict) -> dict:
                 title = next((line.strip() for line in body.splitlines() if line.strip()), f"岗位 {index + 1}")[:120]
                 effective_company = company or account_company
                 account = account_data(identity)
-                _create(client, app_token, "alumni_output", {"AR_记录类型": "job", "AR_账户ID": identity["id"], "AR_企业名称": effective_company, "公司名称（对外展示的名称）": effective_company, "AR_联系人手机号": identity["phone"], "填写人与职位": account["contact_title"], "公司介绍": account["introduction"], "AR_岗位名称": title, "AR_JD正文": body[:12000], "AR_招聘状态": "招聘中", "AR_来源JD": ref, "AR_更新时间": _now()})
+                _create(client, app_token, "alumni_output", {"AR_记录类型": "job", "AR_账户ID": identity["id"], "AR_企业名称": effective_company, "公司名称（对外展示的名称）": effective_company, "AR_联系人手机号": identity["phone"], ALUMNI_CONTACT_NAME_FIELD: account["contact_name"], ALUMNI_CONTACT_ROLE_FIELD: account["contact_role"], "公司介绍": account["introduction"], "AR_岗位名称": title, "AR_JD正文": body[:12000], "AR_招聘状态": "招聘中", "AR_来源JD": ref, "AR_更新时间": _now()})
                 existing.add(ref)
                 imported += 1
     return {"imported": imported, "message": f"已导入 {imported} 条 JD" if imported else "没有找到新的同手机号 JD"}
 
 
-FLOW = {"待反馈": {"感兴趣", "不感兴趣"}, "面试中": {"录用", "未录用", "不感兴趣", "待反馈"}, "不感兴趣": {"感兴趣", "待反馈"}}
+FLOW = {
+    "待反馈": {"感兴趣", "不感兴趣"},
+    "面试中": {"录用", "未录用", "不感兴趣", "待反馈"},
+    "录用": {"面试中", "未录用", "不感兴趣", "待反馈"},
+    "未录用": {"面试中", "录用", "不感兴趣", "待反馈"},
+    "不感兴趣": {"感兴趣", "待反馈"},
+}
 
 
 def feedback(identity: dict, recommendation_id: str, status: str) -> dict:
@@ -579,7 +797,7 @@ def feedback(identity: dict, recommendation_id: str, status: str) -> dict:
             raise ValueError("当前状态不能执行此操作")
         stored = "面试中" if status == "感兴趣" else status
         recommendation_store.set_status(recommendation_id, stored, status if status in {"感兴趣", "不感兴趣"} else "" if status == "待反馈" else None)
-        if stored == "录用":
+        if current == "录用" or stored == "录用":
             sync_business_outcomes()
     return {"id": recommendation_id, "status": stored}
 
@@ -608,8 +826,12 @@ def publish_recommendation(job_id: str, candidate_id: str, stars: int, reason: s
         if any(_field(row, "AR_招聘状态") == "停止" for row in matching_jobs):
             return {"published": False, "reason": "这条 JD 已停止招聘"}
         stable_job_id = job_id.rsplit(":", 1)[0]
-        if any(row["candidate_id"] == candidate_id and row["job_id"].rsplit(":", 1)[0] == stable_job_id and row["status"] == "不感兴趣" for row in recommendation_store.all_rows()):
-            return {"published": False, "reason": "校友已对这位候选人反馈不感兴趣，不能再次推荐给此 JD"}
+        blocked = next((row for row in recommendation_store.all_rows()
+                        if row["candidate_id"] == candidate_id
+                        and row["job_id"].rsplit(":", 1)[0] == stable_job_id
+                        and row["status"] in {"不感兴趣", "未录用"}), None)
+        if blocked:
+            return {"published": False, "reason": f"校友已将这位候选人标记为{blocked['status']}，不能再次推荐给此 JD"}
         existing = recommendation_store.find(job_id, candidate_id)
         if not existing:
             legacy = next((row for row in rows if _field(row, "AR_记录类型") == "recommendation" and _field(row, "AR_来源JD") == job_id and _field(row, "AR_候选人ID") == candidate_id), None)

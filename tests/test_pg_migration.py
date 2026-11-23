@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 import ai_history
@@ -16,18 +17,20 @@ class MigrationTests(unittest.TestCase):
     def test_import_preserves_rows_ids_and_refuses_reimport(self):
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory)
-            with sqlite3.connect(folder / "ai_history.sqlite3") as db:
+            with closing(sqlite3.connect(folder / "ai_history.sqlite3")) as db:
                 db.execute("""CREATE TABLE ai_calls (id INTEGER PRIMARY KEY, started_at TEXT, finished_at TEXT, kind TEXT,
                     target_id TEXT, target_label TEXT, model TEXT, status TEXT, system_prompt TEXT, user_prompt TEXT,
                     raw_response TEXT DEFAULT '', error TEXT DEFAULT '', elapsed_seconds REAL)""")
                 db.execute("INSERT INTO ai_calls (id, started_at, kind, target_id, target_label, model, status, system_prompt, user_prompt) VALUES (7, 'now', 'evaluation', 'x', 'name', 'model', 'success', 's', 'private resume')")
-            with sqlite3.connect(folder / "recommendations.sqlite3") as db:
+                db.commit()
+            with closing(sqlite3.connect(folder / "recommendations.sqlite3")) as db:
                 db.execute("""CREATE TABLE recommendations (id TEXT PRIMARY KEY, job_id TEXT, candidate_id TEXT, owner_id TEXT,
                     candidate_name TEXT, candidate_profile TEXT, stars INTEGER, reason TEXT, status TEXT, interest TEXT,
                     created_at TEXT, updated_at TEXT)""")
                 db.execute("INSERT INTO recommendations VALUES ('legacy', 'job', 'candidate', 'owner', 'name', 'profile', 4, 'reason', '待反馈', '', 'now', 'now')")
                 db.execute("CREATE TABLE feedback_events (id INTEGER PRIMARY KEY, recommendation_id TEXT, from_status TEXT, to_status TEXT, changed_at TEXT)")
                 db.execute("INSERT INTO feedback_events VALUES (9, 'legacy', '待反馈', '面试中', 'now')")
+                db.commit()
             self.assertEqual(migrate_sqlite.migrate(folder), {"ai_calls": 1, "recommendations": 1, "feedback_events": 1})
             self.assertEqual(ai_history.get_call(7)["user_prompt"], "private resume")
             self.assertEqual(recommendation_store.get("legacy")["candidate_id"], "candidate")

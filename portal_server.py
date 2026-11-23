@@ -24,11 +24,12 @@ from xml.etree import ElementTree
 
 from ar import FeishuError
 import mp_oauth
+import portal_store
 from candidate_ai import chat_reply, parse_resume
 from portal_data import (
     MpLoginError, _client, _field, account_data, ensure_schema, feedback,
     list_jobs, list_recommendations, login, login_with_mp, register, save_alumni_company,
-    save_candidate, save_job, remove_candidate_attachment,
+    save_candidate, save_job, save_job_order, update_job_status, remove_candidate_attachment,
 )
 
 
@@ -218,7 +219,8 @@ class Handler(BaseHTTPRequestHandler):
             self._redirect(url, f"AR_OAUTH_STATE={state}; Path=/oauth/callback; HttpOnly; SameSite=Lax; Max-Age=600{secure}")
             return
         if path == "/health":
-            self._json(200, {"ok": True, "candidate_chat": 12, "local_recommendations": True, "alumni_company_fields": 1, "portal_revision": 15, "mp_oauth": bool(os.environ.get("MP_OAUTH_CLIENT_ID") and os.environ.get("MP_OAUTH_CLIENT_SECRET"))})
+            queue = portal_store.queue_summary() if portal_store.enabled() else None
+            self._json(200, {"ok": True, "candidate_chat": 12, "local_recommendations": True, "alumni_company_fields": 2, "portal_revision": 31, "local_primary": portal_store.enabled(), "sync_queue": queue, "mp_oauth": bool(os.environ.get("MP_OAUTH_CLIENT_ID") and os.environ.get("MP_OAUTH_CLIENT_SECRET"))})
             return
         if path in {"/candidate/", "/alumni/"}:
             self._page("index.html")
@@ -389,9 +391,13 @@ class Handler(BaseHTTPRequestHandler):
             elif action == "remove-attachment" and role == "candidate":
                 result = remove_candidate_attachment(identity, payload.get("field", ""), payload.get("index"))
             elif action == "company" and role == "alumni":
-                result = save_alumni_company(identity, payload.get("company", ""), payload.get("contact_title"), payload.get("introduction"))
+                result = save_alumni_company(identity, payload.get("company", ""), payload.get("contact_name"), payload.get("contact_role"))
             elif action == "job" and role == "alumni":
-                result = save_job(identity, record_id=payload.get("id", ""), title=payload.get("title", ""), body=payload.get("body", ""), enabled=payload.get("enabled", True))
+                result = save_job(identity, record_id=payload.get("id", ""), title=payload.get("title", ""), body=payload.get("body", ""), work_location=payload.get("work_location", ""), attendance_mode=payload.get("attendance_mode", ""), job_categories=payload.get("job_categories", []), min_days_per_week=payload.get("min_days_per_week", ""), latest_arrival_date=payload.get("latest_arrival_date", ""), enabled=payload.get("enabled", True))
+            elif action == "job-status" and role == "alumni":
+                result = update_job_status(identity, payload.get("id", ""), payload.get("enabled"))
+            elif action == "job-order" and role == "alumni":
+                result = save_job_order(identity, payload.get("job_ids", []))
             elif action == "feedback" and role == "alumni":
                 result = feedback(identity, payload.get("id", ""), payload.get("status", ""))
             elif action == "resume" and role == "candidate":
@@ -461,6 +467,9 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     from recommendation_store import ensure_schema as ensure_recommendations
     ensure_recommendations()
+    sync_stop = None
+    if portal_store.enabled():
+        portal_store.ensure_schema()
     try:
         ensure_schema()
     except (ValueError, FeishuError, RuntimeError, OSError) as error:
@@ -471,6 +480,10 @@ def main() -> None:
         print(f"飞书业务结果已同步：候选人 {changed['candidate_output']} 行，JD {changed['alumni_output']} 行", flush=True)
     except (ValueError, FeishuError, RuntimeError, OSError) as error:
         print(f"飞书业务结果同步失败，可重启门户重试：{error}", flush=True)
+    if portal_store.enabled():
+        from portal_sync import start as start_portal_sync
+        sync_stop = start_portal_sync()
+        print("PostgreSQL 主存储已启用；飞书将在后台自动同步。", flush=True)
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
     print(f"候选人端：{ORIGIN}/candidate/", flush=True)
@@ -480,6 +493,8 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if sync_stop is not None:
+            sync_stop.set()
         server.server_close()
 
 

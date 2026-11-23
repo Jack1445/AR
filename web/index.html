@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="theme.css">
   <script src="data.js" defer></script>
   <script src="app.js" defer></script>
+  <script src="accounts.js" defer></script>
   <script src="match.js" defer></script>
   <script src="ai_history.js" defer></script>
 </head>
@@ -155,8 +156,28 @@
       </div>
 
       <div id="dataView" class="page-view data-view" hidden>
-        <section class="section-hero"><div class="section-kicker">DATA CENTER / PROCESS INSIGHTS</div><h1>数据中心<span class="hero-blue-dot">.</span></h1><p>招聘进程中的触达、反馈与结果，将在这里汇总。</p></section>
-        <section class="data-recommendations-card" aria-labelledby="dataRecommendationsTitle"><div class="data-recommendations-head"><div><div class="section-kicker">LIVE RECOMMENDATIONS</div><h2 id="dataRecommendationsTitle">JD 推荐进展</h2><p>按岗位查看确认推荐、感兴趣、面试与录用结果。</p></div><button id="dataRecommendationsRefresh" type="button" class="match-outline-button">刷新状态</button></div><div id="dataRecommendationsStatus" role="status"></div><div id="dataRecommendationsList"></div></section>
+        <section class="section-hero"><div class="section-kicker">DATA CENTER / OPERATIONS</div><h1>数据中心<span class="hero-blue-dot">.</span></h1><p>账号、招聘进展和系统数据，统一从左侧进入管理。</p></section>
+        <div class="data-center-layout">
+          <aside class="data-center-nav" aria-label="数据中心子页面">
+            <button type="button" data-data-page="accounts"><span>账号管理</span><small>查看、新增与删除</small></button>
+            <button type="button" data-data-page="recommendations"><span>招聘进展</span><small>JD 推荐与反馈</small></button>
+            <button type="button" data-data-page="sync"><span>同步与存储</span><small>本地与飞书状态</small></button>
+            <button type="button" data-data-page="audit"><span>操作记录</span><small>管理动作追踪</small></button>
+          </aside>
+          <div class="data-center-content">
+            <section id="dataCenterBlank" class="data-center-blank"><span>DATA CENTER</span><p>从左侧选择一个管理页面</p></section>
+            <section id="dataAccountsPage" class="data-subpage" hidden>
+              <div class="data-page-head"><div><div class="section-kicker">ACCOUNT DIRECTORY</div><h2>账号管理</h2><p>账号以本地 PostgreSQL 为准，并与飞书账号记录保持同步。</p></div><button id="accountCreateOpen" type="button" class="data-primary-button">＋ 新增账号</button></div>
+              <div class="account-summary"><span><strong id="candidateAccountCount">0</strong> 候选人账号</span><i></i><span><strong id="alumniAccountCount">0</strong> 校友账号</span></div>
+              <div class="account-tools"><div class="account-role-filter" role="group" aria-label="账号类型"><button type="button" class="active" data-account-role="all">全部</button><button type="button" data-account-role="candidate">候选人</button><button type="button" data-account-role="alumni">校友</button></div><label class="account-search"><span aria-hidden="true">⌕</span><input id="accountSearch" type="search" placeholder="搜索手机号、姓名或企业" autocomplete="off"></label><button id="accountRefresh" type="button" class="match-outline-button">刷新</button></div>
+              <div id="accountStatus" class="account-status" role="status"></div>
+              <div class="account-table-wrap"><table class="account-table"><thead><tr><th>账号</th><th>类型</th><th>资料</th><th>关联数据</th><th>同步</th><th aria-label="操作"></th></tr></thead><tbody id="accountRows"></tbody></table></div>
+            </section>
+            <section id="dataRecommendationsPage" class="data-subpage" hidden><section class="data-recommendations-card" aria-labelledby="dataRecommendationsTitle"><div class="data-recommendations-head"><div><div class="section-kicker">LIVE RECOMMENDATIONS</div><h2 id="dataRecommendationsTitle">JD 推荐进展</h2><p>按岗位查看确认推荐、感兴趣、面试与录用结果。</p></div><button id="dataRecommendationsRefresh" type="button" class="match-outline-button">刷新状态</button></div><div id="dataRecommendationsStatus" role="status"></div><div id="dataRecommendationsList"></div></section></section>
+            <section id="dataSyncPage" class="data-subpage data-placeholder-page" hidden><span>SYNC & STORAGE</span><h2>同步与存储</h2><p>这里将用于查看 PostgreSQL 主库与飞书同步队列状态。</p></section>
+            <section id="dataAuditPage" class="data-subpage data-placeholder-page" hidden><span>ADMIN ACTIVITY</span><h2>操作记录</h2><p>这里将用于集中查看账号和数据管理操作。</p></section>
+          </div>
+        </div>
       </div>
       <footer class="footer"><span>AR · TALENT & OPPORTUNITY</span><span>数据保存在这台电脑上 · 刷新页面以查看最新本地快照</span></footer>
     </main>
@@ -167,6 +188,9 @@
 
   <div id="matchLaunchBackdrop" class="prompt-backdrop" hidden></div>
   <section id="matchLaunchModal" class="match-launch-modal" role="dialog" aria-modal="true" aria-labelledby="matchLaunchTitle" hidden><div class="match-launch-inner"><div class="prompt-top"><span class="prompt-mark">✳</span><button id="matchLaunchClose" type="button" class="prompt-close" aria-label="关闭匹配窗口">×</button></div><div class="section-kicker">AI MATCHING / START HERE</div><h2 id="matchLaunchTitle">从一条 JD 开始匹配。</h2><p>确认本次使用的三段提示词，然后进入初筛与深度评估。</p><label class="ai-field-label" for="matchLaunchJob">目标岗位 JD</label><select id="matchLaunchJob" class="ai-field"></select><div class="match-launch-parts"><label for="matchLaunchGlobal"><span>01</span> 公共提示词</label><textarea id="matchLaunchGlobal" class="match-launch-editor" spellcheck="false"></textarea><label for="matchLaunchSpecific"><span>02</span> JD 专属提示词</label><textarea id="matchLaunchSpecific" class="match-launch-editor" spellcheck="false" placeholder="这条岗位特别看重的要求…"></textarea><div class="match-launch-source-title"><span>03</span> 飞书 JD 原文 <small>自动读取 · 只读</small></div><div id="matchLaunchSummary" class="match-launch-summary"></div></div><div class="match-launch-actions"><button id="matchLaunchManage" type="button" class="match-quiet-button">进入 AI 管理 ↗</button><div class="match-launch-right"><span id="matchLaunchSaveStatus" role="status"></span><button id="matchLaunchStart" type="button" class="ai-primary-button">保存并开始匹配 <span aria-hidden="true">↗</span></button></div></div></div></section>
+
+  <dialog id="accountCreateDialog" class="account-dialog"><form id="accountCreateForm" method="dialog"><div class="account-dialog-head"><div><span>NEW ACCOUNT</span><h2>新增账号</h2></div><button type="button" data-account-close="accountCreateDialog" aria-label="关闭">×</button></div><label>账号类型<select id="accountCreateRole" required><option value="candidate">候选人</option><option value="alumni">校友</option></select></label><label>手机号<input id="accountCreatePhone" type="tel" inputmode="numeric" maxlength="11" placeholder="11 位中国大陆手机号" required></label><label>初始密码<input id="accountCreatePassword" type="password" minlength="5" maxlength="200" autocomplete="new-password" placeholder="至少 5 位" required></label><p class="account-dialog-note">候选人登录后填写个人资料；校友登录后填写企业资料并新增岗位。</p><div id="accountCreateStatus" class="account-dialog-status" role="status"></div><div class="account-dialog-actions"><button type="button" class="match-outline-button" data-account-close="accountCreateDialog">取消</button><button type="submit" class="data-primary-button">创建账号</button></div></form></dialog>
+  <dialog id="accountDeleteDialog" class="account-dialog account-delete-dialog"><form id="accountDeleteForm" method="dialog"><input id="accountDeleteId" type="hidden"><input id="accountDeleteRole" type="hidden"><div class="account-dialog-head"><div><span>DELETE ACCOUNT</span><h2>确认删除账号</h2></div><button type="button" data-account-close="accountDeleteDialog" aria-label="关闭">×</button></div><p id="accountDeleteSummary" class="account-delete-summary"></p><div id="accountDeleteImpact" class="account-delete-impact"></div><label>输入完整手机号确认<input id="accountDeletePhone" type="tel" inputmode="numeric" maxlength="11" autocomplete="off" required></label><div id="accountDeleteStatus" class="account-dialog-status" role="status"></div><div class="account-dialog-actions"><button type="button" class="match-outline-button" data-account-close="accountDeleteDialog">取消</button><button type="submit" class="account-danger-button">删除账号及关联数据</button></div></form></dialog>
 
 </body>
 </html>

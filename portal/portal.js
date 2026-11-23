@@ -1,7 +1,7 @@
 const role = location.pathname.startsWith("/alumni/") ? "alumni" : "candidate";
 const api = `/api/${role}`;
 const $ = id => document.getElementById(id);
-const data = { me: null, jobs: [], recommendations: [], registering: false, manualMode: false, analysisResult: null, chatMessages: [], chatFields: {}, chatBusy: false, chatThinking: false, chatScrollTarget: null, completionAnnounced: false, sessionExpired: false, portalVersionChecked: false, companyPrompted: false, resumeObjectUrl: null, resumeRequestId: 0 };
+const data = { me: null, jobs: [], recommendations: [], registering: false, manualMode: false, analysisResult: null, chatMessages: [], chatFields: {}, chatBusy: false, chatThinking: false, chatScrollTarget: null, completionAnnounced: false, sessionExpired: false, portalVersionChecked: false, companyPrompted: false, jobPrompted: false, companyOnboarding: false, resumeObjectUrl: null, resumeRequestId: 0 };
 const baseFieldName = "意向base地（可多选）";
 const baseOtherFieldName = "意向base地（可多选）-其他-补充内容";
 
@@ -20,6 +20,7 @@ function saveNotice(value, ok, successTitle = "保存成功") {
   if (data.sessionExpired) return;
   $("noticeTitle").textContent = ok ? successTitle : "保存失败";
   $("noticeText").textContent = value;
+  $("noticeText").hidden = !value;
   $("noticeIcon").textContent = ok ? "✓" : "!";
   $("noticeDialog").classList.toggle("error", !ok);
   if (!$("noticeDialog").open) $("noticeDialog").showModal();
@@ -36,6 +37,7 @@ function showSessionExpired() {
   closeDashboardDialogs();
   $("noticeTitle").textContent = "登录已过期";
   $("noticeText").textContent = "请重新登录后继续操作。";
+  $("noticeText").hidden = false;
   $("noticeIcon").textContent = "!";
   $("noticeDialog").classList.add("error");
   if (!$("noticeDialog").open) $("noticeDialog").showModal();
@@ -64,6 +66,8 @@ function showAuth() {
   if ($("noticeDialog").open) $("noticeDialog").close();
   data.me = null;
   data.companyPrompted = false;
+  data.jobPrompted = false;
+  data.companyOnboarding = false;
   data.manualMode = false;
   data.analysisResult = null;
   data.chatMessages = [];
@@ -79,6 +83,124 @@ function displayDate(value) {
   if (!value) return "";
   const date = new Date(Number(value));
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString("sv-SE", { timeZone: "Asia/Shanghai" });
+}
+const talentCalendar = { dialog: null, input: null, view: null, title: null, grid: null };
+function calendarCells(year, month) {
+  const first = new Date(year, month, 1, 12);
+  const mondayOffset = (first.getDay() + 6) % 7;
+  const start = new Date(year, month, 1 - mondayOffset, 12);
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    return { year: date.getFullYear(), month: date.getMonth(), day: date.getDate(), current: date.getMonth() === month };
+  });
+}
+function dateInputValue(year, month, day) {
+  return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+function parseDateInput(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || "");
+  return match ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12) : null;
+}
+function commitCalendarDate(year, month, day) {
+  const input = talentCalendar.input;
+  if (!input) return;
+  input.value = dateInputValue(year, month, day);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  updateCandidateRequiredStates();
+  talentCalendar.dialog.close();
+  input.focus();
+}
+function renderTalentCalendar() {
+  const view = talentCalendar.view;
+  const selected = parseDateInput(talentCalendar.input?.value);
+  const today = new Date();
+  talentCalendar.title.textContent = `${view.getFullYear()}年 ${view.getMonth() + 1}月`;
+  talentCalendar.grid.replaceChildren();
+  for (const item of calendarCells(view.getFullYear(), view.getMonth())) {
+    const button = node("button", `calendar-day${item.current ? "" : " outside"}`, String(item.day));
+    button.type = "button";
+    button.setAttribute("aria-label", `${item.year}年${item.month + 1}月${item.day}日`);
+    if (today.getFullYear() === item.year && today.getMonth() === item.month && today.getDate() === item.day) button.classList.add("today");
+    if (selected && selected.getFullYear() === item.year && selected.getMonth() === item.month && selected.getDate() === item.day) button.classList.add("selected");
+    button.addEventListener("click", () => commitCalendarDate(item.year, item.month, item.day));
+    talentCalendar.grid.append(button);
+  }
+}
+function ensureTalentCalendar() {
+  if (talentCalendar.dialog) return;
+  const dialog = node("dialog", "talent-calendar-dialog");
+  const card = node("div", "talent-calendar-card");
+  const heading = node("div", "talent-calendar-heading");
+  const headingCopy = node("div");
+  headingCopy.append(node("span", "talent-calendar-kicker", "SELECT DATE"), node("strong", "talent-calendar-label", "选择日期"));
+  const close = node("button", "talent-calendar-close", "×");
+  close.type = "button";
+  close.setAttribute("aria-label", "关闭日期选择器");
+  close.addEventListener("click", () => dialog.close());
+  heading.append(headingCopy, close);
+  const nav = node("div", "talent-calendar-nav");
+  const previous = node("button", "calendar-nav-button", "←");
+  const title = node("strong", "calendar-month-title");
+  const next = node("button", "calendar-nav-button", "→");
+  for (const button of [previous, next]) button.type = "button";
+  previous.setAttribute("aria-label", "上个月");
+  next.setAttribute("aria-label", "下个月");
+  previous.addEventListener("click", () => { talentCalendar.view.setMonth(talentCalendar.view.getMonth() - 1); renderTalentCalendar(); });
+  next.addEventListener("click", () => { talentCalendar.view.setMonth(talentCalendar.view.getMonth() + 1); renderTalentCalendar(); });
+  nav.append(previous, title, next);
+  const weekdays = node("div", "calendar-weekdays");
+  for (const day of ["一", "二", "三", "四", "五", "六", "日"]) weekdays.append(node("span", "", day));
+  const grid = node("div", "calendar-grid");
+  const actions = node("div", "talent-calendar-actions");
+  const clear = node("button", "calendar-text-button", "清除");
+  const today = node("button", "calendar-today-button", "选择今天");
+  clear.type = today.type = "button";
+  clear.addEventListener("click", () => {
+    talentCalendar.input.value = "";
+    talentCalendar.input.dispatchEvent(new Event("input", { bubbles: true }));
+    updateCandidateRequiredStates();
+    dialog.close();
+    talentCalendar.input.focus();
+  });
+  today.addEventListener("click", () => { const now = new Date(); commitCalendarDate(now.getFullYear(), now.getMonth(), now.getDate()); });
+  actions.append(clear, today);
+  card.append(heading, nav, weekdays, grid, actions);
+  dialog.append(card);
+  dialog.addEventListener("click", event => { if (event.target === dialog) dialog.close(); });
+  document.body.append(dialog);
+  Object.assign(talentCalendar, { dialog, title, grid });
+}
+function openTalentDatePicker(input, fieldName) {
+  if (input.disabled) return;
+  ensureTalentCalendar();
+  talentCalendar.input = input;
+  const selected = parseDateInput(input.value) || new Date();
+  talentCalendar.view = new Date(selected.getFullYear(), selected.getMonth(), 1, 12);
+  talentCalendar.dialog.querySelector(".talent-calendar-label").textContent = fieldName || "选择日期";
+  renderTalentCalendar();
+  if (!talentCalendar.dialog.open) talentCalendar.dialog.showModal();
+}
+function enhanceTalentDateInput(input, fieldName) {
+  if (!input || input.dataset.talentDateBound === "true") return;
+  input.dataset.talentDateBound = "true";
+  input.type = "text";
+  input.readOnly = true;
+  input.placeholder = "选择日期";
+  input.classList.add("talent-date-input");
+  input.setAttribute("aria-haspopup", "dialog");
+  const shell = node("div", "talent-date-shell");
+  const icon = node("span", "talent-date-icon", "");
+  icon.setAttribute("aria-hidden", "true");
+  input.parentNode.insertBefore(shell, input);
+  shell.append(input, icon);
+  input.addEventListener("click", () => openTalentDatePicker(input, fieldName));
+  input.addEventListener("keydown", event => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openTalentDatePicker(input, fieldName);
+    }
+  });
 }
 function fieldQuestion(field) {
   if (field.type === 17) return field.name === "简历" ? "方便把简历上传一下吗？点击右侧的「上传简历」就可以。" : `方便上传${field.name}吗？`;
@@ -228,11 +350,22 @@ function renderCandidateForm(me) {
       wrapper.append(select);
     } else if (field.type === 5) {
       const input = node("input");
-      input.type = "date";
+      input.type = "text";
       input.value = displayDate(current);
-      input.readOnly = field.readonly;
+      input.placeholder = "选择日期";
+      input.readOnly = true;
       input.disabled = field.readonly;
-      wrapper.append(input);
+      input.className = "talent-date-input";
+      input.setAttribute("aria-haspopup", "dialog");
+      input.addEventListener("click", () => openTalentDatePicker(input, field.name));
+      input.addEventListener("keydown", event => {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openTalentDatePicker(input, field.name); }
+      });
+      const shell = node("div", "talent-date-shell");
+      const icon = node("span", "talent-date-icon", "");
+      icon.setAttribute("aria-hidden", "true");
+      shell.append(input, icon);
+      wrapper.append(shell);
     } else {
       const text = typeof current === "string" ? current : "";
       const input = text.length > 180 || /原因|描述|介绍/.test(field.name) ? node("textarea") : node("input");
@@ -304,12 +437,35 @@ function focusCandidateField(name) {
   wrapper.animate([{ transform: "translateX(0)" }, { transform: "translateX(-5px)" }, { transform: "translateX(5px)" }, { transform: "translateX(0)" }], { duration: 320 });
   wrapper.querySelector("input,textarea,select,label")?.focus();
 }
+function alumniOnboardingStep(me, jobs) {
+  if (!me?.company || !me?.contact_name || !me?.contact_role) return "company";
+  return Array.isArray(jobs) && jobs.length ? "" : "job";
+}
+function openCompanyEditor(onboarding = false) {
+  data.companyOnboarding = onboarding;
+  $("companyName").value = data.me?.company || "";
+  $("companyContactName").value = data.me?.contact_name || "";
+  $("companyContactRole").value = data.me?.contact_role || "";
+  $("companySaveStatus").textContent = "";
+  $("companyDialogClose").hidden = onboarding;
+  $("companyDialogCancel").hidden = onboarding;
+  $("companyDialogTitle").textContent = onboarding ? "先完善企业信息" : "企业信息";
+  if (!$("companyDialog").open) $("companyDialog").showModal();
+  $("companyName").focus();
+}
+function openJobEditor() {
+  clearJobForm();
+  if (!$("jobDialog").open) $("jobDialog").showModal();
+  updateJobRequiredStates();
+  $("jobTitle").focus();
+}
 async function showDashboard(me) {
   data.me = me;
   $("auth").hidden = true;
   $("dashboard").hidden = false;
   $("logout").hidden = false;
   $("accountPhone").textContent = me.phone;
+  $("accountPhone").hidden = role === "alumni";
   const useUpload = role === "candidate" && !me.submitted && !data.manualMode;
   $("candidateUpload").hidden = !useUpload;
   $("candidateChat").hidden = true;
@@ -319,6 +475,9 @@ async function showDashboard(me) {
   $("dashboard").classList.toggle("candidate-editor-view", role === "candidate" && !useUpload);
   document.body.classList.toggle("candidate-upload-active", useUpload);
   $("dashboard").querySelector(".page-heading").hidden = role === "candidate";
+  if (me.sync?.status === "failed") {
+    message("资料已保存在本地；飞书同步暂时失败，系统会自动重试。");
+  }
   if (role === "candidate") {
     $("submittedBanner").hidden = !me.submitted;
     $("backToChat").hidden = true;
@@ -338,14 +497,17 @@ async function showDashboard(me) {
   } else {
     $("dashboard").querySelector(".page-heading").hidden = false;
     $("companyName").value = me.company || "";
-    $("companyContactTitle").value = me.contact_title || "";
-    $("companyIntroduction").value = me.introduction || "";
-    $("alumniCompanyTitle").textContent = me.company || "尚未设置企业";
-    $("openJobDialog").disabled = !me.company || !me.contact_title || !me.introduction;
+    $("companyContactName").value = me.contact_name || "";
+    $("companyContactRole").value = me.contact_role || "";
+    $("openJobDialog").disabled = alumniOnboardingStep(me, [{}]) === "company";
     await refreshAlumni();
-    if (data.portalVersionChecked && !data.companyPrompted && (!me.company || !me.contact_title || !me.introduction)) {
+    const onboarding = alumniOnboardingStep(me, data.jobs);
+    if (data.portalVersionChecked && onboarding === "company" && !data.companyPrompted) {
       data.companyPrompted = true;
-      if (!$("companyDialog").open) $("companyDialog").showModal();
+      openCompanyEditor(true);
+    } else if (data.portalVersionChecked && onboarding === "job" && !data.jobPrompted) {
+      data.jobPrompted = true;
+      openJobEditor();
     }
   }
 }
@@ -525,58 +687,30 @@ async function refreshAlumni() {
   if (!data.portalVersionChecked) {
     const healthResponse = await fetch("/health", { cache: "no-store" });
     const health = await healthResponse.json();
-    if (!healthResponse.ok || !health.local_recommendations || health.alumni_company_fields !== 1 || health.portal_revision !== 10) {
+    if (!healthResponse.ok || !health.local_recommendations || health.alumni_company_fields !== 2 || health.portal_revision !== 31 || !health.local_primary) {
       saveNotice("校友端仍在运行旧版服务。请关闭旧服务窗口，再运行“打开校友端.cmd”，然后刷新页面。", false);
     } else data.portalVersionChecked = true;
   }
   const [jobs, recommendations] = await Promise.all([request("jobs"), request("recommendations")]);
-  data.jobs = jobs.items;
+  data.jobs = await migrateLegacyJobOrder(jobs.items);
   data.recommendations = recommendations.items;
-  $("jobsCount").textContent = `${data.jobs.length} 个岗位`;
-  $("recommendationsCount").textContent = `${data.recommendations.filter(rec => rec.status !== "不感兴趣").length} 条推荐`;
-  $("alumniOverview").textContent = `${data.jobs.filter(job => job.enabled).length} 个岗位招聘中 · ${data.recommendations.filter(rec => rec.status !== "不感兴趣").length} 条候选人推荐`;
-  renderJobs();
-  renderRecommendations();
-}
-function renderJobs() {
-  const list = $("jobsList");
-  list.replaceChildren();
-  if (!data.jobs.length) list.append(node("p", "empty", "还没有 JD。"));
-  for (const job of data.jobs) {
-    const card = node("article", "item-card");
-    const head = node("div", "item-top");
-    head.append(node("h3", "", job.title), node("span", `recruiting-pill ${job.enabled ? "active" : "paused"}`, job.enabled ? "● 招聘中" : "已停止"));
-    const detail = node("details", "job-detail");
-    detail.append(node("summary", "", "查看岗位要求"), node("pre", "", job.body));
-    const actions = node("div", "item-actions");
-    const edit = node("button", "", "编辑 JD");
-    edit.type = "button";
-    edit.addEventListener("click", () => {
-      $("jobId").value = job.id;
-      $("jobTitle").value = job.title;
-      $("jobBody").value = job.body;
-      $("jobEnabled").checked = job.enabled;
-      $("jobSubmit").textContent = "保存修改";
-      $("cancelJobEdit").hidden = false;
-      $("jobDialogTitle").textContent = "编辑 JD";
-      $("jobDialog").showModal();
-      $("jobTitle").focus();
-    });
-    const toggle = node("button", "", job.enabled ? "停止招聘" : "重新开启");
-    toggle.type = "button";
-    toggle.addEventListener("click", async () => {
-      toggle.disabled = true;
-      try { await request("job", { id: job.id, title: job.title, body: job.body, enabled: !job.enabled }); await refreshAlumni(); message("岗位状态已更新", true); }
-      catch (error) { message(error.message); toggle.disabled = false; }
-    });
-    actions.append(edit, toggle);
-    card.append(head, detail, actions);
-    list.append(card);
+  const visibleRecommendations = data.recommendations.filter(rec => !isBlockedStatus(rec.status));
+  const activeJobs = data.jobs.filter(job => job.enabled);
+  const activeJobIds = new Set(activeJobs.map(job => job.id));
+  const activeRecommendations = visibleRecommendations.filter(rec => activeJobIds.has(rec.job_id));
+  if (role === "alumni" && data.me) {
+    $("dashboardEyebrow").textContent = `${data.me.company || "企业招聘"} · ${data.me.contact_role || "校友伙伴"}`;
+    $("dashboardTitle").textContent = `${data.me.display_name || data.me.contact_name || "你好"}，来一起看看人才`;
+    $("dashboardSubtitle").textContent = `${data.jobs.filter(job => job.enabled).length} 个岗位正在招聘，${visibleRecommendations.length} 位候选人等待你查看。`;
   }
+  renderAlumniWorkspace();
 }
 const nextActions = { "待反馈": ["感兴趣", "不感兴趣"], "面试中": ["录用", "未录用"] };
 function statusClass(status) {
   return ({ "待反馈": "pending", "面试中": "interview", "录用": "hired", "不感兴趣": "declined", "未录用": "declined" })[status] || "pending";
+}
+function isBlockedStatus(status) {
+  return status === "不感兴趣" || status === "未录用";
 }
 function resumeUrl(rec, download = false) {
   return `${api}/recommendation-resume?id=${encodeURIComponent(rec.id)}&index=0${download ? "&download=1" : ""}`;
@@ -621,7 +755,7 @@ function renderRecommendations() {
     return;
   }
   const groups = new Map(data.jobs.map(job => [job.id, { title: job.title, enabled: job.enabled, items: [] }]));
-  const declined = data.recommendations.filter(rec => rec.status === "不感兴趣");
+  const declined = data.recommendations.filter(rec => isBlockedStatus(rec.status));
   const trash = $("recommendationTrash");
   trash.hidden = !declined.length;
   $("trashCount").textContent = `回收站 · ${declined.length}`;
@@ -630,7 +764,7 @@ function renderRecommendations() {
   for (const rec of declined) {
     const item = node("div", "trash-item");
     const label = node("span", "", `${rec.candidate_name || "候选人"} · ${rec.job_title || "岗位"}`);
-    const status = node("button", "feedback-pill declined feedback-tag", "不感兴趣 · 修改");
+    const status = node("button", "feedback-pill declined feedback-tag", `${rec.status} · 修改`);
     status.type = "button";
     status.addEventListener("click", () => openFeedbackDialog(rec));
     const restore = node("button", "outline", "恢复显示");
@@ -640,11 +774,11 @@ function renderRecommendations() {
     trashList.append(item);
   }
   for (const rec of data.recommendations) {
-    if (rec.status === "不感兴趣") continue;
+    if (isBlockedStatus(rec.status)) continue;
     if (!groups.has(rec.job_id)) groups.set(rec.job_id, { title: rec.job_title || "历史岗位", enabled: false, items: [] });
     groups.get(rec.job_id).items.push(rec);
   }
-  if (!data.recommendations.some(rec => rec.status !== "不感兴趣")) list.append(node("p", "empty", "当前没有待查看的候选人推荐。"));
+  if (!data.recommendations.some(rec => !isBlockedStatus(rec.status))) list.append(node("p", "empty", "当前没有待查看的候选人推荐。"));
   for (const [jobId, group] of groups) {
     if (!group.items.length) continue;
     const section = node("section", "recommendation-group");
@@ -659,7 +793,7 @@ function renderRecommendations() {
     head.append(node("h3", "", rec.candidate_name || "候选人"), node("span", "stars", "★".repeat(Number(rec.stars) || 0)));
     const meta = node("div", "item-meta");
     if (rec.status === "面试中") {
-      const status = node("button", `feedback-pill ${statusClass(rec.status)} feedback-tag`, "面试中 · 修改");
+      const status = node("button", `feedback-pill ${statusClass(rec.status)} feedback-tag`, "面试中");
       status.type = "button";
       status.addEventListener("click", () => openFeedbackDialog(rec));
       meta.append(status);
@@ -688,13 +822,392 @@ function renderRecommendations() {
     list.append(section);
   }
 }
+function editJob(job) {
+  $("jobId").value = job.id;
+  $("jobTitle").value = job.title;
+  $("jobBody").value = job.body;
+  $("jobWorkLocation").value = job.work_location || "";
+  $("jobAttendanceMode").value = job.attendance_mode || "";
+  $("jobMinDays").value = job.min_days_per_week || "";
+  $("jobLatestArrivalDate").value = job.latest_arrival_date || "";
+  const categories = new Set(job.job_categories || []);
+  for (const input of document.querySelectorAll('input[name="jobCategory"]')) input.checked = categories.has(input.value);
+  $("jobEnabled").checked = job.enabled;
+  $("jobSubmit").textContent = "保存修改";
+  $("cancelJobEdit").hidden = false;
+  $("jobDialogTitle").textContent = "编辑 JD";
+  $("jobDialog").showModal();
+  updateJobRequiredStates();
+  $("jobTitle").focus();
+}
+const alumniCandidateProfileFields = [
+  { label: "当前求职类别", aliases: ["当前求职类别（多选）", "当前求职类别"] },
+  { label: "意向base地", aliases: ["意向base地（可多选）", "意向base地"] },
+  { label: "意向出勤方式", aliases: ["意向出勤方式"] },
+  { label: "意向岗位", aliases: ["意向岗位"] },
+  { label: "最早到岗时间", aliases: ["最早到岗时间"], date: true },
+  { label: "每周到岗天数", aliases: ["每周到岗天数"] },
+  { label: "来源", aliases: ["来源", "你是通过什么渠道了解到的招聘信息？若是经人推荐，可填写推荐人姓名"] },
+];
+function formatCandidateProfileDate(value) {
+  const text = String(value || "").trim();
+  if (!text) return "未填写";
+  const direct = /^(\d{4})\D+(\d{1,2})\D+(\d{1,2})/.exec(text);
+  if (direct) return `${direct[1]}-${direct[2].padStart(2, "0")}-${direct[3].padStart(2, "0")}`;
+  let date;
+  if (/^\d{10,13}$/.test(text)) {
+    const timestamp = Number(text) * (text.length === 10 ? 1000 : 1);
+    date = new Date(timestamp);
+  } else date = new Date(text);
+  if (Number.isNaN(date.getTime())) return text;
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" })
+      .formatToParts(date)
+      .filter(part => part.type !== "literal")
+      .map(part => [part.type, part.value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+function selectedCandidateProfile(profile) {
+  const lines = String(profile || "").split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  return alumniCandidateProfileFields.map(field => {
+    let value = "";
+    for (const alias of field.aliases) {
+      const prefix = lines.find(line => line.startsWith(`${alias}：`) || line.startsWith(`${alias}:`));
+      if (prefix) {
+        value = prefix.slice(alias.length + 1).trim();
+        break;
+      }
+    }
+    return { label: field.label, value: field.date ? formatCandidateProfileDate(value) : value || "未填写" };
+  });
+}
+function pipelineCandidateRow(rec) {
+  const row = node("article", "pipeline-candidate-row");
+  row.classList.add(`pipeline-row-${statusClass(rec.status)}`);
+  const identity = node("div", "pipeline-candidate-identity");
+  identity.append(node("strong", "", rec.candidate_name || "候选人"), node("small", "", rec.resume_count > 0 ? "简历已就绪" : "候选人资料"));
+  const stars = Math.max(0, Math.min(5, Number(rec.stars) || 0));
+  const match = node("div", "pipeline-match");
+  match.append(node("span", "pipeline-stars-filled", "★".repeat(stars)), node("span", "pipeline-stars-empty", "★".repeat(5 - stars)));
+  match.setAttribute("aria-label", `${stars} 星匹配`);
+  match.title = `${stars} 星匹配`;
+  const stage = node("div", "pipeline-stage");
+  if (["面试中", "录用", "未录用"].includes(rec.status)) {
+    const status = node("button", `feedback-pill ${statusClass(rec.status)} feedback-tag`, rec.status);
+    status.type = "button";
+    status.addEventListener("click", () => openFeedbackDialog(rec));
+    stage.append(status);
+  } else stage.append(node("span", `feedback-pill ${statusClass(rec.status)}`, rec.status));
+  const actions = node("div", "pipeline-row-actions");
+  if (rec.resume_count > 0) {
+    const view = node("button", "outline", "查看简历");
+    view.type = "button";
+    view.addEventListener("click", () => openResume(rec));
+    actions.append(view);
+  }
+  for (const action of nextActions[rec.status] || []) {
+    const button = node("button", action === "感兴趣" || action === "录用" ? "primary" : "outline", action);
+    button.type = "button";
+    button.addEventListener("click", () => saveFeedback(rec, action, button));
+    actions.append(button);
+  }
+  const detailToggle = node("button", "pipeline-detail-toggle", "查看详情");
+  detailToggle.type = "button";
+  detailToggle.setAttribute("aria-expanded", "false");
+  const detailGrid = node("div", "pipeline-detail-grid pipeline-detail-panel");
+  detailGrid.hidden = true;
+  const reason = node("section", "");
+  reason.append(node("small", "", "AI 评估依据"), node("p", "", rec.reason || "暂无评估依据"));
+  const profile = node("section", "candidate-profile-section");
+  profile.append(node("small", "", "候选人资料"));
+  const profileGrid = node("div", "candidate-profile-grid");
+  for (const item of selectedCandidateProfile(rec.candidate_profile)) {
+    const field = node("div", "candidate-profile-item");
+    field.append(node("span", "candidate-profile-label", item.label), node("strong", "candidate-profile-value", item.value));
+    profileGrid.append(field);
+  }
+  profile.append(profileGrid);
+  detailGrid.append(reason, profile);
+  detailToggle.addEventListener("click", () => {
+    const expanded = detailToggle.getAttribute("aria-expanded") === "true";
+    detailToggle.setAttribute("aria-expanded", String(!expanded));
+    detailToggle.textContent = expanded ? "查看详情" : "收起详情";
+    detailGrid.hidden = expanded;
+  });
+  row.append(detailToggle, identity, match, stage, actions, detailGrid);
+  return row;
+}
+async function setJobEnabled(job, enabled, button) {
+  button.disabled = true;
+  try {
+    await request("job-status", { id: job.id, enabled });
+    await refreshAlumni();
+    message("");
+  } catch (error) {
+    message(error.message);
+    button.disabled = false;
+  }
+}
+const pipelineColumnDefaults = [15, 39.168573828455195, 14.362990690986752, 9.085019987043971, 22.383415493514082];
+const pipelineColumnMinimums = [95, 100, 80, 80, 90];
+const pipelineColumnStorageKey = "talent.pipeline.columns.v5";
+function validPipelineColumnRatios(value) {
+  return Array.isArray(value) && value.length === 5 && value.every(item => Number.isFinite(Number(item)) && Number(item) > 0);
+}
+function loadPipelineColumnRatios() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(pipelineColumnStorageKey));
+    if (validPipelineColumnRatios(saved)) return saved.map(Number);
+  } catch {}
+  return [...pipelineColumnDefaults];
+}
+function applyPipelineColumnRatios(ratios, persist = false) {
+  const list = $("recommendationsList");
+  if (!list || !validPipelineColumnRatios(ratios)) return;
+  ratios.forEach((ratio, index) => list.style.setProperty(`--pipeline-column-${index + 1}`, `${Number(ratio).toFixed(4)}fr`));
+  if (persist) {
+    try { localStorage.setItem(pipelineColumnStorageKey, JSON.stringify(ratios.map(Number))); } catch {}
+  }
+}
+function pipelineColumnWidths(labels) {
+  const template = getComputedStyle(labels).gridTemplateColumns;
+  const widths = template.match(/[\d.]+px/g)?.map(value => Number.parseFloat(value)) || [];
+  return widths.length === 5 && widths.every(Number.isFinite) ? widths : [];
+}
+function resizedPipelineColumnRatios(widths, boundary, delta) {
+  if (widths.length !== 5 || boundary < 0 || boundary > widths.length - 2) return null;
+  const pairWidth = widths[boundary] + widths[boundary + 1];
+  const leftWidth = Math.max(
+    pipelineColumnMinimums[boundary],
+    Math.min(pairWidth - pipelineColumnMinimums[boundary + 1], widths[boundary] + delta),
+  );
+  const next = [...widths];
+  next[boundary] = leftWidth;
+  next[boundary + 1] = pairWidth - leftWidth;
+  const total = next.reduce((sum, width) => sum + width, 0);
+  return next.map(width => width / total * 100);
+}
+function bindPipelineColumnResizer(handle, labels, boundary) {
+  handle.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    const initialWidths = pipelineColumnWidths(labels);
+    if (!initialWidths.length) return;
+    event.preventDefault();
+    handle.setPointerCapture(event.pointerId);
+    handle.classList.add("active");
+    document.body.classList.add("pipeline-resizing");
+    const startX = event.clientX;
+    let latest = null;
+    const move = moveEvent => {
+      latest = resizedPipelineColumnRatios(initialWidths, boundary, moveEvent.clientX - startX);
+      if (latest) applyPipelineColumnRatios(latest);
+    };
+    const finish = () => {
+      handle.classList.remove("active");
+      document.body.classList.remove("pipeline-resizing");
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", finish);
+      handle.removeEventListener("pointercancel", finish);
+      if (latest) applyPipelineColumnRatios(latest, true);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", finish);
+    handle.addEventListener("pointercancel", finish);
+  });
+  handle.addEventListener("keydown", event => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const ratios = resizedPipelineColumnRatios(pipelineColumnWidths(labels), boundary, event.key === "ArrowLeft" ? -12 : 12);
+    if (ratios) applyPipelineColumnRatios(ratios, true);
+  });
+  handle.addEventListener("dblclick", () => applyPipelineColumnRatios(pipelineColumnDefaults, true));
+}
+function jobOrderStorageKey() {
+  return `talent.pipeline.jobs.${data.me?.id || data.me?.phone || "anonymous"}.v1`;
+}
+function loadLegacyJobOrder() {
+  try {
+    const value = JSON.parse(localStorage.getItem(jobOrderStorageKey()));
+    return Array.isArray(value) ? value.filter(item => typeof item === "string") : [];
+  } catch { return []; }
+}
+function sortJobsByOrder(jobs, order) {
+  const positions = new Map(order.map((id, index) => [id, index]));
+  return jobs.map((job, index) => ({ job, index })).sort((left, right) => {
+    const leftPosition = positions.has(left.job.id) ? positions.get(left.job.id) : Number.MAX_SAFE_INTEGER;
+    const rightPosition = positions.has(right.job.id) ? positions.get(right.job.id) : Number.MAX_SAFE_INTEGER;
+    return leftPosition - rightPosition || left.index - right.index;
+  }).map(item => item.job);
+}
+async function migrateLegacyJobOrder(jobs) {
+  const legacyOrder = loadLegacyJobOrder();
+  if (!legacyOrder.length) return jobs;
+  const ordered = sortJobsByOrder(jobs, legacyOrder);
+  try {
+    await request("job-order", { job_ids: ordered.filter(job => job.enabled).map(job => job.id) });
+    localStorage.removeItem(jobOrderStorageKey());
+    return ordered;
+  } catch { return jobs; }
+}
+async function saveRenderedJobOrder(list) {
+  const ids = [...list.querySelectorAll(":scope > .pipeline-job")].map(section => section.dataset.jobId).filter(Boolean);
+  try { await request("job-order", { job_ids: ids }); }
+  catch (error) { saveNotice(`岗位顺序保存失败：${error.message}`, false); }
+}
+function bindJobOrderHandle(handle, section, list) {
+  handle.draggable = true;
+  handle.addEventListener("dragstart", event => {
+    section.classList.add("job-order-dragging");
+    list.classList.add("sorting-jobs");
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", section.dataset.jobId);
+  });
+  handle.addEventListener("dragend", () => {
+    section.classList.remove("job-order-dragging");
+    list.classList.remove("sorting-jobs");
+    void saveRenderedJobOrder(list);
+  });
+  handle.addEventListener("keydown", event => {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    const sibling = event.key === "ArrowUp" ? section.previousElementSibling : section.nextElementSibling;
+    if (!sibling?.classList.contains("pipeline-job")) return;
+    if (event.key === "ArrowUp") list.insertBefore(section, sibling);
+    else list.insertBefore(sibling, section);
+    void saveRenderedJobOrder(list);
+    handle.focus();
+  });
+}
+function bindJobOrderDropZone(list) {
+  list.ondragover = event => {
+    const dragged = list.querySelector(".pipeline-job.job-order-dragging");
+    if (!dragged) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const target = event.target.closest(".pipeline-job");
+    if (!target || target === dragged) return;
+    const before = event.clientY < target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2;
+    list.insertBefore(dragged, before ? target : target.nextElementSibling);
+  };
+  list.ondrop = event => {
+    if (!list.querySelector(".pipeline-job.job-order-dragging")) return;
+    event.preventDefault();
+  };
+}
+function renderAlumniWorkspace() {
+  const list = $("recommendationsList");
+  list.replaceChildren();
+  applyPipelineColumnRatios(loadPipelineColumnRatios());
+  bindJobOrderDropZone(list);
+  const activeJobs = data.jobs.filter(job => job.enabled);
+  const stoppedJobs = data.jobs.filter(job => !job.enabled);
+  const stoppedPanel = $("stoppedJobs");
+  const stoppedList = $("stoppedJobsList");
+  stoppedPanel.hidden = !stoppedJobs.length;
+  $("stoppedJobsCount").textContent = `停止招聘 · ${stoppedJobs.length}`;
+  stoppedList.replaceChildren();
+  for (const job of stoppedJobs) {
+    const item = node("div", "trash-item stopped-job-item");
+    const candidateCount = data.recommendations.filter(rec => rec.job_id === job.id && !isBlockedStatus(rec.status)).length;
+    const label = node("div", "stopped-job-label");
+    label.append(node("strong", "", job.title), node("small", "", `${candidateCount} 位候选人`));
+    const actions = node("div", "stopped-job-actions");
+    const edit = node("button", "outline", "编辑岗位");
+    edit.type = "button";
+    edit.addEventListener("click", () => editJob(job));
+    const reopen = node("button", "outline", "重新开启");
+    reopen.type = "button";
+    reopen.addEventListener("click", () => setJobEnabled(job, true, reopen));
+    actions.append(edit, reopen);
+    item.append(label, actions);
+    stoppedList.append(item);
+  }
+  const declined = data.recommendations.filter(rec => isBlockedStatus(rec.status));
+  $("recommendationTrash").hidden = !declined.length;
+  $("trashCount").textContent = `已屏蔽 · ${declined.length}`;
+  const trashList = $("trashList");
+  trashList.replaceChildren();
+  for (const rec of declined) {
+    const item = node("div", "trash-item");
+    const label = node("span", "", `${rec.candidate_name || "候选人"} · ${rec.job_title || "岗位"}`);
+    const restore = node("button", "outline", "恢复到岗位");
+    restore.type = "button";
+    restore.addEventListener("click", () => saveFeedback(rec, "待反馈", restore));
+    item.append(label, restore);
+    trashList.append(item);
+  }
+  if (!activeJobs.length) {
+    const empty = node("div", "pipeline-empty");
+    empty.append(
+      node("strong", "", data.jobs.length ? "当前没有正在招聘的岗位" : "从第一个岗位开始"),
+      node("p", "", data.jobs.length ? "可以重新开启已停止的岗位，或创建一个新岗位。" : "创建 JD 后，匹配的候选人会直接出现在岗位下方。"),
+    );
+    const create = node("button", "primary", "新增岗位");
+    create.type = "button";
+    create.addEventListener("click", openJobEditor);
+    empty.append(create);
+    list.append(empty);
+    return;
+  }
+  for (const job of activeJobs) {
+    const candidates = data.recommendations
+      .filter(rec => rec.job_id === job.id && !isBlockedStatus(rec.status))
+      .sort((left, right) => Number(left.status === "录用") - Number(right.status === "录用"));
+    const section = node("section", "pipeline-job");
+    section.dataset.jobId = job.id;
+    const heading = node("header", "pipeline-job-heading");
+    const title = node("div", "pipeline-job-title");
+    const orderHandle = node("button", "job-order-handle", "");
+    orderHandle.type = "button";
+    orderHandle.title = "拖动调整岗位顺序；也可用上下方向键移动";
+    orderHandle.setAttribute("aria-label", `调整${job.title}的展示顺序`);
+    bindJobOrderHandle(orderHandle, section, list);
+    title.append(orderHandle, node("span", `recruiting-pill ${job.enabled ? "active" : "paused"}`, job.enabled ? "招聘中" : "已停止"), node("h3", "", job.title), node("span", "pipeline-candidate-count", `${candidates.length} 位候选人`));
+    const jobActions = node("div", "pipeline-job-actions");
+    const edit = node("button", "outline", "编辑岗位");
+    edit.type = "button";
+    edit.addEventListener("click", () => editJob(job));
+    const toggle = node("button", "outline", "停止招聘");
+    toggle.type = "button";
+    toggle.addEventListener("click", () => setJobEnabled(job, false, toggle));
+    jobActions.append(edit, toggle);
+    heading.append(title, jobActions);
+    const brief = node("details", "pipeline-job-brief");
+    brief.append(node("summary", "", "查看岗位说明"), node("p", "", job.body));
+    const table = node("div", "pipeline-table");
+    if (candidates.length) {
+      const labels = node("div", "pipeline-table-labels");
+      ["匹配详情", "候选人", "匹配度", "当前阶段"].forEach((label, boundary) => {
+        const cell = node("span", "pipeline-column-label", label);
+        if (boundary < 3) {
+          const handle = node("button", "pipeline-column-resizer");
+          handle.type = "button";
+          handle.title = "拖动调整列宽；双击恢复默认宽度";
+          handle.setAttribute("aria-label", `调整${label}列宽`);
+          bindPipelineColumnResizer(handle, labels, boundary);
+          cell.append(handle);
+        }
+        labels.append(cell);
+      });
+      table.append(labels);
+      for (const rec of candidates) table.append(pipelineCandidateRow(rec));
+    } else {
+      const empty = node("div", "pipeline-job-empty");
+      empty.append(node("strong", "", "等待合适的人才"), node("span", "", "有新的推荐后，会直接显示在这里。"));
+      table.append(empty);
+    }
+    section.append(heading, brief, table);
+    list.append(section);
+  }
+}
 async function saveFeedback(rec, action, button) {
   button.disabled = true;
   try {
     await request("feedback", { id: rec.id, status: action });
     if ($("feedbackDialog").open) $("feedbackDialog").close();
     await refreshAlumni();
-    message(action === "待反馈" ? "已恢复到推荐列表" : "反馈已保存", true);
+    message("");
   } catch (error) { message(error.message); button.disabled = false; }
 }
 function openFeedbackDialog(rec) {
@@ -702,9 +1215,15 @@ function openFeedbackDialog(rec) {
   $("feedbackDialogHint").textContent = rec.job_title || "";
   const choices = $("feedbackChoices");
   choices.replaceChildren();
-  const available = rec.status === "不感兴趣" ? [["待反馈", "恢复显示"], ["感兴趣", "改为感兴趣"]] : [["待反馈", "改为待反馈"], ["不感兴趣", "改为不感兴趣"]];
+  const choicesByStatus = {
+    "不感兴趣": [["待反馈", "恢复到待反馈"], ["感兴趣", "改为面试中"]],
+    "未录用": [["待反馈", "恢复到待反馈"], ["面试中", "改为面试中"], ["录用", "改为录用"]],
+    "录用": [["面试中", "改为面试中"], ["未录用", "改为未录用"], ["待反馈", "改为待反馈"]],
+    "面试中": [["待反馈", "改为待反馈"], ["录用", "改为录用"], ["未录用", "改为未录用"], ["不感兴趣", "改为不感兴趣"]],
+  };
+  const available = choicesByStatus[rec.status] || [["待反馈", "改为待反馈"], ["不感兴趣", "改为不感兴趣"]];
   for (const [status, label] of available) {
-    const button = node("button", status === "感兴趣" ? "primary" : "outline", label);
+    const button = node("button", status === "录用" ? "feedback-choice-hired" : status === "感兴趣" ? "primary" : "outline", label);
     button.type = "button";
     button.addEventListener("click", () => saveFeedback(rec, status, button));
     choices.append(button);
@@ -716,6 +1235,26 @@ function clearJobForm() {
   $("jobId").value = "";
   $("jobSubmit").textContent = "保存 JD";
   $("jobDialogTitle").textContent = "新增 JD";
+  updateJobRequiredStates();
+}
+function selectedJobCategories() {
+  return [...document.querySelectorAll('input[name="jobCategory"]:checked')].map(input => input.value);
+}
+function jobFieldHasValue(card) {
+  const categoryInputs = [...card.querySelectorAll('input[name="jobCategory"]')];
+  if (categoryInputs.length) return categoryInputs.some(input => input.checked);
+  const control = card.querySelector("input,textarea,select");
+  return Boolean(control?.value?.trim());
+}
+function updateJobRequiredStates() {
+  const missing = [];
+  for (const card of document.querySelectorAll("#jobForm [data-job-required]")) {
+    const empty = !jobFieldHasValue(card);
+    card.classList.toggle("required-missing", empty);
+    card.setAttribute("aria-invalid", empty ? "true" : "false");
+    if (empty) missing.push(card);
+  }
+  return missing;
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -902,34 +1441,80 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
       const me = await request("profile", { fields, description: $("candidateDescription").value });
       data.analysisResult = null;
-      await showDashboard(me); message("资料已保存", true); saveNotice("资料已更新至飞书表格。", true);
+      await showDashboard(me); message("资料已保存到本地，正在后台同步飞书", true); saveNotice("", true);
     } catch (error) { message(error.message); saveNotice(error.message, false); }
     finally { if (button) button.disabled = false; }
   });
-  $("toggleCandidate").addEventListener("click", async () => { try { const me = await request("profile", { enabled: !data.me.enabled }); await showDashboard(me); message("推荐状态已更新", true); } catch (error) { message(error.message); } });
-  $("openCompanyDialog").addEventListener("click", () => { $("companyName").value = data.me?.company || ""; $("companyContactTitle").value = data.me?.contact_title || ""; $("companyIntroduction").value = data.me?.introduction || ""; $("companySaveStatus").textContent = ""; $("companyDialog").showModal(); $("companyName").focus(); });
-  $("openJobDialog").addEventListener("click", () => { clearJobForm(); $("jobDialog").showModal(); $("jobTitle").focus(); });
+  $("toggleCandidate").addEventListener("click", async () => {
+    const button = $("toggleCandidate");
+    if (button.disabled) return;
+    button.disabled = true; button.setAttribute("aria-busy", "true");
+    try { const me = await request("profile", { enabled: !data.me.enabled }); await showDashboard(me); message("推荐状态已更新，正在后台同步飞书", true); }
+    catch (error) { message(error.message); }
+    finally { button.disabled = false; button.removeAttribute("aria-busy"); }
+  });
+  $("openCompanyDialog").addEventListener("click", () => openCompanyEditor(false));
+  $("openJobDialog").addEventListener("click", openJobEditor);
   for (const button of document.querySelectorAll("[data-close-dialog]")) button.addEventListener("click", () => $(button.dataset.closeDialog).close());
+  $("companyDialog").addEventListener("cancel", event => { if (data.companyOnboarding) event.preventDefault(); });
+  $("companyDialog").addEventListener("close", () => {
+    data.companyOnboarding = false;
+    $("companyDialogClose").hidden = false;
+    $("companyDialogCancel").hidden = false;
+  });
   $("closeResumeDialog").addEventListener("click", () => $("resumeDialog").close());
   $("resumeDialog").addEventListener("close", () => { data.resumeRequestId++; $("resumeFrame").src = "about:blank"; $("resumeFrame").hidden = true; $("resumeDownload").removeAttribute("href"); if (data.resumeObjectUrl) URL.revokeObjectURL(data.resumeObjectUrl); data.resumeObjectUrl = null; });
   $("companyForm").addEventListener("submit", async event => {
     event.preventDefault();
     const button = event.submitter;
     const status = $("companySaveStatus");
-    const company = $("companyName").value.trim(), contactTitle = $("companyContactTitle").value.trim(), introduction = $("companyIntroduction").value.trim();
+    const company = $("companyName").value.trim(), contactName = $("companyContactName").value.trim(), contactRole = $("companyContactRole").value.trim();
     if (button) button.disabled = true;
     status.textContent = "正在保存…";
     try {
       if (!data.portalVersionChecked) throw new Error("当前仍是旧版校友端服务。请关闭旧服务窗口，重新打开校友端并刷新页面。 ");
-      const me = await request("company", { company, contact_title: contactTitle, introduction });
-      if (me.company !== company || me.contact_title !== contactTitle || me.introduction !== introduction) throw new Error("服务未返回新保存的企业资料。请重启校友端服务后重试。");
+      const me = await request("company", { company, contact_name: contactName, contact_role: contactRole });
+      if (me.company !== company || me.contact_name !== contactName || me.contact_role !== contactRole) throw new Error("服务未返回新保存的企业资料。请重启校友端服务后重试。");
+      data.companyOnboarding = false;
       $("companyDialog").close();
       await showDashboard(me);
-      message("企业信息已保存", true);
+      message("企业信息已保存到本地，正在后台同步飞书", true);
     } catch (error) { status.textContent = error.message; message(error.message); }
     finally { if (button) button.disabled = false; }
   });
-  $("jobForm").addEventListener("submit", async event => { event.preventDefault(); const button = $("jobSubmit"); button.disabled = true; try { await request("job", { id: $("jobId").value, title: $("jobTitle").value, body: $("jobBody").value, enabled: $("jobEnabled").checked }); $("jobDialog").close(); clearJobForm(); await refreshAlumni(); message("JD 已保存", true); } catch (error) { message(error.message); } finally { button.disabled = false; } });
+  $("jobForm").addEventListener("input", updateJobRequiredStates);
+  $("jobForm").addEventListener("change", updateJobRequiredStates);
+  enhanceTalentDateInput($("jobLatestArrivalDate"), "最晚到岗日期");
+  $("jobForm").addEventListener("submit", async event => {
+    event.preventDefault();
+    const missing = updateJobRequiredStates();
+    if (missing.length) {
+      missing[0].querySelector("input,textarea,select")?.focus();
+      message("");
+      saveNotice("请补齐新增 JD 中标红的必填信息。", false);
+      return;
+    }
+    const button = $("jobSubmit");
+    button.disabled = true;
+    try {
+      await request("job", {
+        id: $("jobId").value,
+        title: $("jobTitle").value,
+        body: $("jobBody").value,
+        work_location: $("jobWorkLocation").value,
+        attendance_mode: $("jobAttendanceMode").value,
+        job_categories: selectedJobCategories(),
+        min_days_per_week: $("jobMinDays").value,
+        latest_arrival_date: $("jobLatestArrivalDate").value,
+        enabled: $("jobEnabled").checked,
+      });
+      $("jobDialog").close();
+      clearJobForm();
+      await refreshAlumni();
+      message("JD 已保存到本地，正在后台同步飞书", true);
+    } catch (error) { message(""); saveNotice(error.message, false); }
+    finally { button.disabled = false; }
+  });
   $("cancelJobEdit").addEventListener("click", () => { $("jobDialog").close(); clearJobForm(); });
   try { await showDashboard(await request("me")); } catch { showAuth(); }
 });

@@ -253,7 +253,7 @@ function showView(view, navId, target) {
   for (const name of ["overview", "directory", "ai", "match", "data"]) $(`${name}View`).hidden = view !== name;
   if (view === "ai" && !state.promptInitialized) preparePrompt();
   if (view === "ai") window.AR_AI_HISTORY?.load(true);
-  if (view === "data") window.AR_MATCH?.refreshRecommendations().catch(() => {});
+  if (view === "data") window.AR_ACCOUNTS?.resetDataCenter();
   document.querySelectorAll(".nav-item").forEach((item) => { item.classList.remove("active"); item.removeAttribute("aria-current"); });
   $(navId).classList.add("active");
   $(navId).setAttribute("aria-current", "page");

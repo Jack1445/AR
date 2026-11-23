@@ -23,7 +23,7 @@ PORT = 38479
 SYNC_LOCK = threading.Lock()
 MIGRATION_LOCK = threading.Lock()
 LEGACY_MIGRATED = False
-ASSETS = {"index.html", "styles.css", "theme.css", "app.js", "match.js", "ai_history.js", "data.js", "favicon.svg", "talent-wordmark.svg", "candidate-ai.html", "candidate-ai.css", "candidate-ai.js"}
+ASSETS = {"index.html", "styles.css", "theme.css", "app.js", "accounts.js", "match.js", "ai_history.js", "data.js", "favicon.svg", "talent-wordmark.svg", "candidate-ai.html", "candidate-ai.css", "candidate-ai.js"}
 TABLE_IDS = {table["id"] for table in TABLES if table["kind"] in {"candidate_output", "alumni_output"} and not table["archived"]}
 
 
@@ -69,7 +69,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urllib.parse.unquote(urllib.parse.urlparse(self.path).path)
         if path == "/health":
-            self._json(200, {"ok": True, "candidate_ai_test": 10, "match_confirm": True, "match_ai_test": 1})
+            self._json(200, {"ok": True, "candidate_ai_test": 10, "match_confirm": True, "match_ai_test": 1, "account_admin": 2})
+            return
+        if path == "/api/accounts":
+            try:
+                from account_admin import list_accounts
+                self._json(200, list_accounts())
+            except Exception:
+                self._json(500, {"error": "无法读取本地账号信息"})
             return
         if path == "/api/ai-config":
             try:
@@ -148,6 +155,26 @@ class Handler(BaseHTTPRequestHandler):
         if not self._allowed_host() or self.headers.get("Origin") != f"http://{HOST}:{self.server.server_port}":
             self._bytes(403, b"Forbidden")
             return
+        if self.path == "/api/accounts":
+            if self.headers.get("X-AR-Accounts") != "1" or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+                self._bytes(403, b"Forbidden")
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                length = -1
+            if length < 1 or length > 2048:
+                self._json(400, {"error": "账号信息格式无效"})
+                return
+            try:
+                from account_admin import create_account
+                payload = json.loads(self.rfile.read(length))
+                self._json(201, create_account(payload.get("role", ""), payload.get("phone", ""), payload.get("password", "")))
+            except (ValueError, json.JSONDecodeError) as error:
+                self._json(400, {"error": str(error)})
+            except Exception:
+                self._json(500, {"error": "新增账号失败，请检查飞书连接与本地数据库"})
+            return
         if self.path in {"/api/match-tag", "/api/match-tag-plan", "/api/match-evaluate", "/api/match-confirm"}:
             if self.headers.get("X-AR-Match") != "1" or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 self._bytes(403, b"Forbidden")
@@ -217,6 +244,24 @@ class Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": str(error)})
         finally:
             SYNC_LOCK.release()
+
+    def do_DELETE(self) -> None:
+        if not self._allowed_host() or self.headers.get("Origin") != f"http://{HOST}:{self.server.server_port}" or self.headers.get("X-AR-Accounts") != "1":
+            self._bytes(403, b"Forbidden")
+            return
+        parsed = urllib.parse.urlparse(self.path)
+        parts = urllib.parse.unquote(parsed.path).strip("/").split("/")
+        if len(parts) != 4 or parts[:2] != ["api", "accounts"]:
+            self._bytes(404, b"Not found")
+            return
+        try:
+            from account_admin import delete_account
+            phone = urllib.parse.parse_qs(parsed.query).get("phone", [""])[0]
+            self._json(200, delete_account(parts[2], parts[3], phone))
+        except ValueError as error:
+            self._json(400, {"error": str(error)})
+        except Exception:
+            self._json(500, {"error": "删除账号失败；为避免数据不一致，操作已停止"})
 
     def log_message(self, format: str, *args) -> None:
         # Access logs could contain local attachment filenames or record IDs.

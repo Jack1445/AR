@@ -62,6 +62,22 @@ def all_rows() -> list[dict]:
         return [dict(row) for row in db.execute("SELECT * FROM recommendations ORDER BY created_at, id")]
 
 
+def delete_related(*, candidate_id: str = "", owner_id: str = "", job_record_ids: list[str] | None = None) -> int:
+    """Delete recommendation process rows owned by an account being removed."""
+    job_ids = list(dict.fromkeys(job_record_ids or []))
+    with LOCK, _connect() as db:
+        rows = db.execute("SELECT id, job_id, candidate_id, owner_id FROM recommendations").fetchall()
+        ids = [row["id"] for row in rows if
+               (candidate_id and row["candidate_id"] == candidate_id) or
+               (owner_id and row["owner_id"] == owner_id) or
+               any(row["job_id"] == job_id or row["job_id"].startswith(job_id + ":") for job_id in job_ids)]
+        if not ids:
+            return 0
+        db.execute("DELETE FROM feedback_events WHERE recommendation_id = ANY(%s)", (ids,))
+        result = db.execute("DELETE FROM recommendations WHERE id = ANY(%s)", (ids,))
+        return result.rowcount
+
+
 def create(job_id: str, candidate_id: str, owner_id: str, name: str, profile: str, stars: int, reason: str, *, legacy_id: str = '', status: str = '待反馈', interest: str = '') -> dict:
     with LOCK, _connect() as db:
         now = _now()

@@ -7,6 +7,7 @@ Set-Location -LiteralPath $project
 . (Join-Path $project 'python_runtime.ps1')
 . (Join-Path $project 'local_postgres.ps1')
 Initialize-ARLocalPostgres
+$env:AR_LOCAL_PRIMARY = '1'
 $projectPython = Join-Path $project '.venv\Scripts\python.exe'
 if (Test-Path -LiteralPath $projectPython -PathType Leaf) {
     $python = $projectPython
@@ -35,7 +36,7 @@ function Test-CurrentServer {
             $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
             try {
                 $health = $reader.ReadToEnd() | ConvertFrom-Json
-                return ([int]$health.candidate_ai_test -eq 10 -and $health.match_confirm -eq $true -and [int]$health.match_ai_test -eq 1)
+                return ([int]$health.candidate_ai_test -eq 10 -and $health.match_confirm -eq $true -and [int]$health.match_ai_test -eq 1 -and [int]$health.account_admin -eq 2)
             }
             finally { $reader.Close() }
         } finally { $response.Close() }

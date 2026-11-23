@@ -26,6 +26,7 @@ env:
   clear:
     AR_PORTAL_ORIGIN: https://match.miracleplus.com
     MP_OAUTH_URL: https://build.miracleplus.com
+    AR_LOCAL_PRIMARY: "1"
     DATABASE_URL: <%= ENV.fetch("DATABASE_URL") %>
     FEISHU_APP_ID: <%= ENV.fetch("FEISHU_APP_ID") %>
     FEISHU_APP_SECRET: <%= ENV.fetch("FEISHU_APP_SECRET") %>
