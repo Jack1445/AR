@@ -1,0 +1,14 @@
+.git
+.github
+.env*
+.venv
+__pycache__
+*.pyc
+*.sqlite3*
+downloads
+web/data.js*
+ai_config.json*
+candidate_ai_config.json*
+match_state.json*
+.kamal/secrets*
+tests

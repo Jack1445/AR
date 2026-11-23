@@ -1,7 +1,7 @@
 const role = location.pathname.startsWith("/alumni/") ? "alumni" : "candidate";
 const api = `/api/${role}`;
 const $ = id => document.getElementById(id);
-const data = { me: null, jobs: [], recommendations: [], registering: false, manualMode: false, chatMessages: [], chatFields: {}, chatBusy: false, chatThinking: false, chatScrollTarget: null, completionAnnounced: false, sessionExpired: false, portalVersionChecked: false, companyPrompted: false, resumeObjectUrl: null, resumeRequestId: 0 };
+const data = { me: null, jobs: [], recommendations: [], registering: false, manualMode: false, analysisResult: null, chatMessages: [], chatFields: {}, chatBusy: false, chatThinking: false, chatScrollTarget: null, completionAnnounced: false, sessionExpired: false, portalVersionChecked: false, companyPrompted: false, resumeObjectUrl: null, resumeRequestId: 0 };
 const baseFieldName = "意向base地（可多选）";
 const baseOtherFieldName = "意向base地（可多选）-其他-补充内容";
 
@@ -55,7 +55,7 @@ function setAuthMode(registering) {
   $("loginTab").classList.toggle("active", !registering);
   $("registerTab").classList.toggle("active", registering);
   $("formTitle").textContent = registering ? "创建账户" : "欢迎回来";
-  $("authSubmit").textContent = registering ? "注册并进入" : "登录";
+  $("authSubmit").querySelector("span").textContent = registering ? "注册并进入" : "登录";
   $("password").autocomplete = registering ? "new-password" : "current-password";
   message("", false, true);
 }
@@ -65,6 +65,7 @@ function showAuth() {
   data.me = null;
   data.companyPrompted = false;
   data.manualMode = false;
+  data.analysisResult = null;
   data.chatMessages = [];
   data.chatFields = {};
   data.completionAnnounced = false;
@@ -152,6 +153,7 @@ function renderCandidateForm(me) {
     }
     const current = me.values?.[field.name];
     const wrapper = node("div", "candidate-field");
+    wrapper.dataset.required = field.required ? "true" : "false";
     if (currentGroup !== 0) wrapper.classList.add("candidate-field-wide");
     wrapper.dataset.field = field.name;
     const label = node("label", "field-title", field.name);
@@ -245,6 +247,7 @@ function renderCandidateForm(me) {
     target.append(wrapper);
   }
   updateBaseOtherVisibility();
+  updateCandidateRequiredStates();
 }
 function updateBaseOtherVisibility() {
   const entries = [...$("candidateFields").querySelectorAll(".candidate-field")];
@@ -269,33 +272,71 @@ function collectCandidateFields() {
   }
   return fields;
 }
+function candidateFieldHasValue(field, wrapper) {
+  if (field.type === 17) return (Array.isArray(data.me?.values?.[field.name]) && data.me.values[field.name].length > 0) || Boolean(wrapper?.querySelector('input[type="file"]')?.files?.length);
+  if (!wrapper || wrapper.hidden) return field.name === baseOtherFieldName;
+  if (field.type === 4) return wrapper.querySelectorAll("input:checked").length > 0;
+  const control = wrapper.querySelector("input,textarea,select");
+  return Boolean(control?.value?.trim());
+}
+function updateCandidateRequiredStates() {
+  const target = $("candidateFields");
+  if (!target || !data.me?.schema) return;
+  let missing = 0;
+  for (const field of data.me.schema) {
+    const wrapper = [...target.querySelectorAll(".candidate-field")].find(item => item.dataset.field === field.name);
+    if (!wrapper || !field.required || field.readonly) continue;
+    const empty = !candidateFieldHasValue(field, wrapper);
+    wrapper.classList.toggle("required-missing", empty);
+    wrapper.setAttribute("aria-invalid", empty ? "true" : "false");
+    if (empty) missing++;
+  }
+  const hint = $("requiredHint");
+  if (hint) {
+    hint.textContent = missing ? `还有 ${missing} 项必填信息需要补充` : "必填信息已完整，可以保存";
+    hint.classList.toggle("complete", missing === 0);
+  }
+}
+function focusCandidateField(name) {
+  const wrapper = [...$("candidateFields").querySelectorAll(".candidate-field")].find(item => item.dataset.field === name);
+  if (!wrapper) return;
+  wrapper.scrollIntoView({ behavior: "smooth", block: "center" });
+  wrapper.animate([{ transform: "translateX(0)" }, { transform: "translateX(-5px)" }, { transform: "translateX(5px)" }, { transform: "translateX(0)" }], { duration: 320 });
+  wrapper.querySelector("input,textarea,select,label")?.focus();
+}
 async function showDashboard(me) {
   data.me = me;
   $("auth").hidden = true;
   $("dashboard").hidden = false;
   $("logout").hidden = false;
   $("accountPhone").textContent = me.phone;
-  const useChat = role === "candidate" && !me.submitted && !data.manualMode;
-  $("candidateChat").hidden = !useChat;
-  $("candidateDashboard").hidden = role !== "candidate" || useChat;
+  const useUpload = role === "candidate" && !me.submitted && !data.manualMode;
+  $("candidateUpload").hidden = !useUpload;
+  $("candidateChat").hidden = true;
+  $("candidateDashboard").hidden = role !== "candidate" || useUpload;
   $("alumniDashboard").hidden = role !== "alumni";
+  $("dashboard").classList.toggle("candidate-upload-view", useUpload);
+  $("dashboard").classList.toggle("candidate-editor-view", role === "candidate" && !useUpload);
+  document.body.classList.toggle("candidate-upload-active", useUpload);
+  $("dashboard").querySelector(".page-heading").hidden = role === "candidate";
   if (role === "candidate") {
-    if (useChat) {
-      if (!data.chatMessages.length) {
-        data.chatMessages = initialChatMessages(me).map(content => ({ role: "assistant", content }));
-        data.completionAnnounced = requiredProfileComplete(me);
-        data.chatScrollTarget = 0;
-      }
-      renderChat();
-    }
     $("submittedBanner").hidden = !me.submitted;
-    $("backToChat").hidden = me.submitted;
+    $("backToChat").hidden = true;
     renderCandidateForm(me);
     $("candidateDescription").value = me.description || "";
     $("candidateStatus").textContent = me.enabled ? "推荐已开启" : "推荐已停止";
     $("candidateStatus").classList.toggle("off", !me.enabled);
-    $("toggleCandidate").textContent = me.enabled ? "停止推荐" : "重新开启";
+    $("toggleCandidate").classList.toggle("active", me.enabled);
+    $("toggleCandidate").setAttribute("aria-checked", me.enabled ? "true" : "false");
+    $("toggleCandidate").title = me.enabled ? "点击停止推荐" : "点击开启推荐";
+    const analysis = data.analysisResult;
+    $("analysisBanner").hidden = !analysis || me.submitted;
+    if (analysis && !me.submitted) {
+      $("analysisBanner").classList.toggle("warning", Boolean(analysis.error));
+      $("analysisSummary").textContent = analysis.error || (analysis.count ? `已自动填写 ${analysis.count} 项信息，请检查结果并补齐橘红色必填项。` : "简历已上传，请补齐橘红色标记的必填内容。");
+    }
   } else {
+    $("dashboard").querySelector(".page-heading").hidden = false;
     $("companyName").value = me.company || "";
     $("companyContactTitle").value = me.contact_title || "";
     $("companyIntroduction").value = me.introduction || "";
@@ -679,13 +720,31 @@ function clearJobForm() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   document.body.classList.add(role === "alumni" ? "alumni-mode" : "candidate-mode");
-  document.title = role === "candidate" ? "AR · 候选人" : "AR · 校友企业";
+  document.title = role === "candidate" ? "TALENT · 候选人" : "TALENT · 校友企业";
   $("roleBadge").textContent = role === "candidate" ? "候选人端" : "校友端";
   $("authTitle").textContent = role === "candidate" ? "让合适的机会，找到你。" : "让合适的人才，走向你。";
   $("authSubtitle").textContent = role === "candidate" ? "管理你的简历与推荐状态。" : "管理岗位，查看匹配的候选人。";
   $("dashboardEyebrow").textContent = role === "candidate" ? "CANDIDATE SPACE" : "ALUMNI SPACE";
   $("dashboardTitle").textContent = role === "candidate" ? "我的求职空间" : "企业招聘空间";
   $("dashboardSubtitle").textContent = role === "candidate" ? "简历与推荐，由你掌控。" : "岗位与候选人，都在这里。";
+  try {
+    const response = await fetch("/health", { cache: "no-store" });
+    if ((await response.json()).mp_oauth) {
+      $("localLogin").hidden = true;
+      $("oauthLogin").hidden = false;
+      $("oauthLink").href = `/${role}/oauth/start`;
+      const authError = new URLSearchParams(location.search).get("auth_error");
+      const authMessages = {
+        founder_company_hr_required: "此奇绩账号未关联 founder_company_hr 角色，无法登录校友端。请联系奇绩管理员确认账号角色。",
+        invalid_phone: "奇绩账号未返回有效的中国大陆手机号。请在奇绩账号中绑定并验证手机号后重试。",
+        phone_mismatch: "奇绩账号手机号与已绑定的候选人账户不一致，请联系管理员核实绑定。",
+        phone_in_use: "该手机号已关联其他候选人账户。请联系管理员核实身份并将该账户绑定到你的奇绩账号。",
+        service_error: "登录服务暂时无法读取或创建账户，请稍后重试；若持续失败，请联系管理员并告知发生时间。",
+        auth_error: "OAuth 登录失败，请重新发起登录。",
+      };
+      if (authError) $("oauthMessage").textContent = authMessages[authError] || authMessages.auth_error;
+    }
+  } catch {}
   $("loginTab").addEventListener("click", () => setAuthMode(false));
   $("registerTab").addEventListener("click", () => setAuthMode(true));
   $("authForm").addEventListener("submit", async event => {
@@ -696,6 +755,55 @@ document.addEventListener("DOMContentLoaded", async () => {
     finally { button.disabled = false; }
   });
   $("logout").addEventListener("click", async () => { try { await request("logout", {}); } finally { showAuth(); } });
+  $("candidateResume").addEventListener("change", async event => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const status = $("candidateUploadStatus");
+    if (file.size > 8 * 1024 * 1024) { status.textContent = "文件不能超过 8 MB"; return; }
+    $("candidateResumeButton").classList.add("busy");
+    $("candidateUploadProgress").hidden = false;
+    status.textContent = "";
+    const phaseTimer = setTimeout(() => {
+      $("candidateUploadProgressTitle").textContent = "AI 正在解析简历";
+      $("candidateUploadProgressText").textContent = "正在识别经历、能力与求职意向…";
+    }, 900);
+    try {
+      const encoded = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(",")[1]); reader.onerror = reject; reader.readAsDataURL(file); });
+      const me = await request("resume", { field: "简历", name: file.name, data: encoded, analyze: true });
+      data.analysisResult = { error: me.analysis_error || "", count: Array.isArray(me.analysis_fields) ? me.analysis_fields.length : 0 };
+      data.manualMode = true;
+      await showDashboard(me);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (error) {
+      status.textContent = error.message;
+      status.classList.remove("ok");
+    } finally {
+      clearTimeout(phaseTimer);
+      $("candidateResumeButton").classList.remove("busy");
+      $("candidateUploadProgress").hidden = true;
+      $("candidateUploadProgressTitle").textContent = "正在读取你的简历";
+      $("candidateUploadProgressText").textContent = "AI 正在整理经历与求职信息…";
+      event.target.value = "";
+    }
+  });
+  const uploadCard = $("candidateUpload").querySelector(".candidate-upload-card");
+  uploadCard.addEventListener("pointermove", event => {
+    const rect = uploadCard.getBoundingClientRect();
+    uploadCard.style.setProperty("--pointer-x", `${event.clientX - rect.left}px`);
+    uploadCard.style.setProperty("--pointer-y", `${event.clientY - rect.top}px`);
+  });
+  for (const eventName of ["dragenter", "dragover"]) uploadCard.addEventListener(eventName, event => { event.preventDefault(); uploadCard.classList.add("dragging"); });
+  for (const eventName of ["dragleave", "drop"]) uploadCard.addEventListener(eventName, event => { event.preventDefault(); uploadCard.classList.remove("dragging"); });
+  uploadCard.addEventListener("drop", event => {
+    const file = event.dataTransfer?.files?.[0];
+    if (!file) return;
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    $("candidateResume").files = transfer.files;
+    $("candidateResume").dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  $("candidateFields").addEventListener("input", updateCandidateRequiredStates);
+  $("candidateFields").addEventListener("change", () => { updateBaseOtherVisibility(); updateCandidateRequiredStates(); });
   $("noticeOk").addEventListener("click", () => {
     $("noticeDialog").close();
     if (data.sessionExpired) { data.sessionExpired = false; showAuth(); setAuthMode(false); }
@@ -783,7 +891,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (field.type === 17) {
           if (field.name === "简历" && !data.me.files?.length && !uploads.some(input => input.dataset.field === "简历")) throw new Error("请上传简历");
         } else if (value === null || value === "" || Array.isArray(value) && !value.length || typeof value === "string" && !value.trim()) {
-          throw new Error(`请填写${field.name}`);
+          updateCandidateRequiredStates(); focusCandidateField(field.name); throw new Error(`请填写${field.name}`);
         }
       }
       for (const input of uploads) {
@@ -793,6 +901,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         await request("resume", { field: input.dataset.field, name: file.name, data: encoded });
       }
       const me = await request("profile", { fields, description: $("candidateDescription").value });
+      data.analysisResult = null;
       await showDashboard(me); message("资料已保存", true); saveNotice("资料已更新至飞书表格。", true);
     } catch (error) { message(error.message); saveNotice(error.message, false); }
     finally { if (button) button.disabled = false; }

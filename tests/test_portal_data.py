@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import portal_data
 import recommendation_store
+from tests.pg_test import isolated_schema
 
 
 class FakeClient:
@@ -56,16 +57,18 @@ class PortalDataTests(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory(dir=portal_data.ROOT)
         self.addCleanup(folder.cleanup)
-        db_patch = patch.object(recommendation_store, "STORE_FILE", Path(folder.name) / "recommendations.sqlite3")
-        db_patch.start()
-        self.addCleanup(db_patch.stop)
+        isolated_schema(self)
+        recommendation_store.ensure_schema()
         self.client = FakeClient()
         self.client_patch = patch.object(portal_data, "_client", return_value=(self.client, "app"))
         self.table_patch = patch.object(portal_data, "_table", side_effect=lambda kind: kind)
+        source_patch = patch.object(portal_data, "TABLES", [{"id": "source", "kind": "candidate", "archived": False}, {"id": "jobs", "kind": "job", "archived": False}])
         self.client_patch.start()
         self.table_patch.start()
+        source_patch.start()
         self.addCleanup(self.client_patch.stop)
         self.addCleanup(self.table_patch.stop)
+        self.addCleanup(source_patch.stop)
         portal_data.ensure_schema()
 
     def test_registration_login_and_candidate_controls(self):
@@ -82,6 +85,33 @@ class PortalDataTests(unittest.TestCase):
         self.assertFalse(profile["enabled"])
         self.assertEqual(row["fields"]["AR_推荐状态"], "停止")
         self.assertTrue(all(kind == "candidate_output" for _, kind, _body in self.client.writes if _body.get("fields", {}).get("AR_记录类型") == "account" or _body.get("fields", {}).get("AR_推荐状态")))
+
+    def test_mp_login_binds_subject_not_phone(self):
+        identity = portal_data.login_with_mp("candidate", "mp-user-1", "13800138000")
+        self.assertEqual(portal_data.login_with_mp("candidate", "mp-user-1", "13800138000"), identity)
+        self.assertEqual(self.client.rows["candidate_output"][0]["fields"]["AR_MP用户ID"], "mp-user-1")
+        with self.assertRaises(ValueError):
+            portal_data.login_with_mp("candidate", "mp-user-2", "13800138000")
+        with self.assertRaises(ValueError):
+            portal_data.login_with_mp("candidate", "mp-user-1", "13900139000")
+        self.assertEqual(len(self.client.rows["candidate_output"]), 1)
+
+    def test_mp_login_rejects_invalid_phone_with_specific_error(self):
+        with self.assertRaises(portal_data.MpLoginError) as raised:
+            portal_data.login_with_mp("candidate", "mp-user-1", "")
+        self.assertEqual(raised.exception.code, "invalid_phone")
+
+    def test_mp_login_reports_existing_phone_account(self):
+        portal_data.register("candidate", "13800138000", "password")
+        with self.assertRaises(portal_data.MpLoginError) as raised:
+            portal_data.login_with_mp("candidate", "mp-user-1", "13800138000")
+        self.assertEqual(raised.exception.code, "phone_in_use")
+
+    def test_mp_login_binds_legacy_account_by_matching_phone(self):
+        legacy = portal_data.register("alumni", "13800138000", "abcde")
+        identity = portal_data.login_with_mp("alumni", "mp-user-1", "13800138000")
+        self.assertEqual(identity, legacy)
+        self.assertEqual(self.client.rows["alumni_output"][0]["fields"]["AR_MP用户ID"], "mp-user-1")
 
     def test_multiple_jobs_ownership_and_feedback(self):
         owner = portal_data.register("alumni", "13800138000", "abcde")
@@ -115,7 +145,7 @@ class PortalDataTests(unittest.TestCase):
         self.assertEqual(portal_data.feedback(owner, rec["id"], "感兴趣")["status"], "面试中")
         self.assertEqual(portal_data.feedback(owner, rec["id"], "不感兴趣")["status"], "不感兴趣")
         with recommendation_store._connect() as db:
-            history = [row["to_status"] for row in db.execute("SELECT to_status FROM feedback_events WHERE recommendation_id = ? ORDER BY id", (rec["id"],))]
+            history = [row["to_status"] for row in db.execute("SELECT to_status FROM feedback_events WHERE recommendation_id = %s ORDER BY id", (rec["id"],))]
         self.assertEqual(history, ["不感兴趣", "待反馈", "面试中", "不感兴趣"])
 
     def test_company_contact_and_introduction_use_existing_feishu_fields(self):

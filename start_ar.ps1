@@ -5,6 +5,8 @@ $project = $PSScriptRoot
 $url = 'http://127.0.0.1:38479/'
 Set-Location -LiteralPath $project
 . (Join-Path $project 'python_runtime.ps1')
+. (Join-Path $project 'local_postgres.ps1')
+Initialize-ARLocalPostgres
 $projectPython = Join-Path $project '.venv\Scripts\python.exe'
 if (Test-Path -LiteralPath $projectPython -PathType Leaf) {
     $python = $projectPython

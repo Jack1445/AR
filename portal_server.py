@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
+import hmac
 import io
 import json
 import mimetypes
 import os
 import re
 import secrets
+import urllib.error
 import tempfile
 import threading
 import time
@@ -20,10 +23,11 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 from ar import FeishuError
-from candidate_ai import chat_reply
+import mp_oauth
+from candidate_ai import chat_reply, parse_resume
 from portal_data import (
-    _client, _field, account_data, ensure_schema, feedback,
-    list_jobs, list_recommendations, login, register, save_alumni_company,
+    MpLoginError, _client, _field, account_data, ensure_schema, feedback,
+    list_jobs, list_recommendations, login, login_with_mp, register, save_alumni_company,
     save_candidate, save_job, remove_candidate_attachment,
 )
 
@@ -38,7 +42,25 @@ SESSIONS: dict[str, tuple[dict, float]] = {}
 FAILED_LOGINS: dict[str, list[float]] = {}
 SESSION_LOCK = threading.RLock()
 SESSION_TTL = 12 * 60 * 60
-ASSETS = {"index.html", "portal.css", "portal.js"}
+ASSETS = {"index.html", "portal.css", "portal.js", "brand-mark.svg", "talent-wordmark.svg"}
+
+
+def oauth_state(role: str) -> str:
+    payload = f"{role}.{int(time.time())}.{secrets.token_urlsafe(24)}"
+    signature = hmac.new(mp_oauth.settings()[2].encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}.{signature}"
+
+
+def oauth_role(state: str) -> str | None:
+    try:
+        role, created, nonce, signature = state.split(".")
+        payload = f"{role}.{created}.{nonce}"
+        expected = hmac.new(mp_oauth.settings()[2].encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if role in {"candidate", "alumni"} and 0 <= time.time() - int(created) <= 600 and hmac.compare_digest(signature, expected):
+            return role
+    except (ValueError, TypeError):
+        pass
+    return None
 
 
 def resume_response(content: bytes, filename: str, download: bool) -> tuple[bytes, str, str]:
@@ -69,7 +91,9 @@ def resume_response(content: bytes, filename: str, download: bool) -> tuple[byte
 
 class Handler(BaseHTTPRequestHandler):
     def _allowed(self) -> bool:
-        return self.headers.get("Host") == ORIGIN_HOST and self.headers.get("Sec-Fetch-Site") in {None, "none", "same-origin"}
+        site = self.headers.get("Sec-Fetch-Site")
+        navigation = self.command == "GET" and urllib.parse.urlparse(self.path).path in {"/oauth/callback", "/candidate/", "/alumni/"} and self.headers.get("Sec-Fetch-Mode") == "navigate"
+        return self.headers.get("Host") == ORIGIN_HOST and (site in {None, "none", "same-origin"} or (navigation and site in {"same-site", "cross-site"}))
 
     def _send(self, code: int, body: bytes, content_type: str = "application/json; charset=utf-8", cookie: str = "") -> None:
         try:
@@ -129,13 +153,72 @@ class Handler(BaseHTTPRequestHandler):
         body = file.read_bytes()
         self._send(200, body, mimetypes.guess_type(file.name)[0] or "text/plain")
 
+    def _redirect(self, url: str, cookie: str = "") -> None:
+        self.send_response(303)
+        self.send_header("Location", url)
+        self.send_header("Cache-Control", "no-store")
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
+        self.end_headers()
+
+    def _oauth_callback(self) -> None:
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        state = query.get("state", [""])[0]
+        browser_state = re.search(r"(?:^|;\s*)AR_OAUTH_STATE=([A-Za-z0-9_.-]{40,})", self.headers.get("Cookie", ""))
+        if not browser_state or not secrets.compare_digest(state, browser_state.group(1)):
+            self._json(400, {"error": "OAuth 授权状态不匹配，请重新登录"})
+            return
+        role = oauth_role(state)
+        if not role or not query.get("code") or query.get("error"):
+            self._json(400, {"error": "OAuth 授权无效或已过期，请重新登录"})
+            return
+        try:
+            info = mp_oauth.userinfo(query["code"][0])
+        except (ValueError, KeyError, TypeError, urllib.error.URLError, TimeoutError, FeishuError, OSError):
+            self._redirect(f"/{role}/?auth_error=1")
+            return
+        roles = info.get("roles")
+        if role == "alumni" and not (isinstance(roles, list) and "founder_company_hr" in roles):
+            self._redirect("/alumni/?auth_error=founder_company_hr_required")
+            return
+        try:
+            identity = login_with_mp(role, info.get("sub"), info.get("phone"))
+            account_data(identity)
+        except MpLoginError as error:
+            self._redirect(f"/{role}/?auth_error={error.code}")
+            return
+        except (ValueError, KeyError, TypeError, urllib.error.URLError, TimeoutError, FeishuError, OSError):
+            self._redirect(f"/{role}/?auth_error=service_error")
+            return
+        token = secrets.token_urlsafe(32)
+        with SESSION_LOCK:
+            SESSIONS[token] = (identity, time.time() + SESSION_TTL)
+        self._redirect(f"/{role}/", self._cookie(token, SESSION_TTL))
+
     def do_GET(self) -> None:
+        if urllib.parse.urlparse(self.path).path == "/up":
+            self._json(200, {"ok": True})
+            return
         if not self._allowed():
             self._json(403, {"error": "Forbidden"})
             return
         path = urllib.parse.urlparse(self.path).path
+        if path == "/oauth/callback":
+            self._oauth_callback()
+            return
+        if path in {"/candidate/oauth/start", "/alumni/oauth/start"}:
+            role = path.split("/")[1]
+            try:
+                state = oauth_state(role)
+                url = mp_oauth.authorization_url(state)
+            except ValueError as error:
+                self._json(503, {"error": str(error)})
+                return
+            secure = "; Secure" if ORIGIN.startswith("https://") else ""
+            self._redirect(url, f"AR_OAUTH_STATE={state}; Path=/oauth/callback; HttpOnly; SameSite=Lax; Max-Age=600{secure}")
+            return
         if path == "/health":
-            self._json(200, {"ok": True, "candidate_chat": 12, "local_recommendations": True, "alumni_company_fields": 1, "portal_revision": 10})
+            self._json(200, {"ok": True, "candidate_chat": 12, "local_recommendations": True, "alumni_company_fields": 1, "portal_revision": 15, "mp_oauth": bool(os.environ.get("MP_OAUTH_CLIENT_ID") and os.environ.get("MP_OAUTH_CLIENT_SECRET"))})
             return
         if path in {"/candidate/", "/alumni/"}:
             self._page("index.html")
@@ -263,6 +346,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             payload = self._body(12_000_000 if action == "resume" else 100_000)
             if action in {"register", "login"}:
+                if os.environ.get("MP_OAUTH_CLIENT_ID") and os.environ.get("MP_OAUTH_CLIENT_SECRET"):
+                    self._json(403, {"error": "请使用奇绩账号登录"})
+                    return
                 phone = payload.get("phone", "")
                 attempt_key = f"{self.client_address[0]}:{role}:{phone}"
                 with SESSION_LOCK:
@@ -352,14 +438,33 @@ class Handler(BaseHTTPRequestHandler):
             token = client.upload_attachment(path, app_token)
         with WRITE_LOCK:
             _update(client, app_token, "candidate_output", identity["id"], {field_name: [{"file_token": token}], "AR_更新时间": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
-        return account_data(identity)
+        profile = account_data(identity)
+        if payload.get("analyze") is True and field_name == "简历":
+            try:
+                analysis = parse_resume(content, name, profile["schema"], profile["values"])
+                saved = dict(analysis["fields"])
+                for item in profile["schema"]:
+                    if item["type"] == 5 and isinstance(saved.get(item["name"]), str):
+                        from datetime import datetime, timedelta, timezone
+                        saved[item["name"]] = int(datetime.strptime(saved[item["name"]], "%Y-%m-%d").replace(tzinfo=timezone(timedelta(hours=8))).timestamp() * 1000)
+                if saved:
+                    profile = save_candidate(identity, form_fields=saved, draft=True)
+                profile["analysis_fields"] = list(saved)
+            except (ValueError, RuntimeError) as error:
+                profile["analysis_error"] = str(error)
+        return profile
 
     def log_message(self, format: str, *args) -> None:
         pass
 
 
 def main() -> None:
-    ensure_schema()
+    from recommendation_store import ensure_schema as ensure_recommendations
+    ensure_recommendations()
+    try:
+        ensure_schema()
+    except (ValueError, FeishuError, RuntimeError, OSError) as error:
+        print(f"飞书门户初始化失败，配置修复后重启门户即可重试：{error}", flush=True)
     try:
         from portal_data import sync_business_outcomes
         changed = sync_business_outcomes()

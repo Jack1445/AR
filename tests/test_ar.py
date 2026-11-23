@@ -1,9 +1,12 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import ar
+import build_web
 
 
 class FakeClient:
@@ -23,6 +26,15 @@ class FakeClient:
 
 
 class ArTests(unittest.TestCase):
+    def test_deployment_table_config_comes_from_environment(self):
+        config = {"base_url": "https://example.feishu.cn/base/exampleAppToken", "tables": [
+            {"id": "candidate1", "name": "候选人", "kind": "candidate_output", "archived": False}]}
+        with patch.dict(os.environ, {"AR_CONFIG_JSON": json.dumps(config)}):
+            self.assertEqual(build_web.configured_tables(), config["tables"])
+        with patch.dict(os.environ, {"AR_CONFIG_JSON": ""}):
+            with self.assertRaises(json.JSONDecodeError):
+                build_web.configured_tables()
+
     def test_target_identifiers(self):
         self.assertEqual(
             ar.identifiers("https://example.feishu.cn/base/exampleAppToken?table=exampleTableId&view=exampleView"),

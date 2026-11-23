@@ -1,0 +1,108 @@
+name: Test and deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      setup:
+        description: First deployment only (install Kamal proxy and start app)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: alumni_talent_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 5
+    env:
+      PG_TEST_DATABASE_URL: postgresql://postgres:test@127.0.0.1:5432/alumni_talent_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests
+
+  deploy:
+    needs: test
+    if: github.event_name == 'workflow_dispatch' || vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: write
+    env:
+      AR_CONFIG_JSON: ${{ secrets.AR_CONFIG_JSON }}
+      KAMAL_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+      - run: gem install kamal -v 2.12.0 --no-document
+      - name: Configure SSH certificate and host verification
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          SSH_CERT: ${{ secrets.DEPLOY_SSH_CERT }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -eu
+          test -n "$SSH_PRIVATE_KEY" && test -n "$SSH_CERT" && test -n "$SSH_KNOWN_HOSTS"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_CERT" > ~/.ssh/id_ed25519-cert.pub
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/id_ed25519-cert.pub
+          printf '%s\n' \
+            'Host mp-jump' \
+            '    HostName 112.126.91.159' \
+            '    Port 20202' \
+            '    User hejiang' \
+            '    IdentityFile ~/.ssh/id_ed25519' \
+            '    CertificateFile ~/.ssh/id_ed25519-cert.pub' \
+            '    IdentitiesOnly yes' \
+            '    StrictHostKeyChecking yes' \
+            '' \
+            'Host alumni-talent' \
+            '    HostName 172.20.188.97' \
+            '    User devops' \
+            '    ProxyJump mp-jump' \
+            '    IdentityFile ~/.ssh/id_ed25519' \
+            '    CertificateFile ~/.ssh/id_ed25519-cert.pub' \
+            '    IdentitiesOnly yes' \
+            '    StrictHostKeyChecking yes' \
+            > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+      - name: Check deployment inputs
+        run: |
+          set -eu
+          test "${{ github.repository }}" = 'qjctrd/alumni-talent'
+          test -n "$AR_CONFIG_JSON"
+      - name: Write AR config into Docker build context
+        run: ruby -rjson -e 'File.write("ar.json", JSON.generate(JSON.parse(ENV.fetch("AR_CONFIG_JSON"))))'
+      - name: First setup or deploy
+        run: |
+          set -eu
+          if [ "${{ inputs.setup }}" = 'true' ]; then
+            kamal setup
+          else
+            kamal deploy
+          fi

@@ -23,7 +23,7 @@ PORT = 38479
 SYNC_LOCK = threading.Lock()
 MIGRATION_LOCK = threading.Lock()
 LEGACY_MIGRATED = False
-ASSETS = {"index.html", "styles.css", "theme.css", "app.js", "match.js", "ai_history.js", "data.js", "favicon.svg", "candidate-ai.html", "candidate-ai.css", "candidate-ai.js"}
+ASSETS = {"index.html", "styles.css", "theme.css", "app.js", "match.js", "ai_history.js", "data.js", "favicon.svg", "talent-wordmark.svg", "candidate-ai.html", "candidate-ai.css", "candidate-ai.js"}
 TABLE_IDS = {table["id"] for table in TABLES if table["kind"] in {"candidate_output", "alumni_output"} and not table["archived"]}
 
 
@@ -224,6 +224,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    from ai_history import ensure_schema as ensure_ai_history
+    from recommendation_store import ensure_schema as ensure_recommendations
+    ensure_ai_history()
+    ensure_recommendations()
     if not (PUBLIC / "data.js").is_file():
         build_snapshot()
     server = ThreadingHTTPServer((HOST, PORT), Handler)

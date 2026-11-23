@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -15,9 +16,10 @@ PUBLIC = ROOT / "web"
 def configured_tables() -> list[dict]:
     """Read table identifiers from the local config, never from committed code."""
     config_path = ROOT / "ar.json"
-    if not config_path.is_file():
+    config_json = os.environ.get("AR_CONFIG_JSON")
+    if config_json is None and not config_path.is_file():
         return []
-    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config = json.loads(config_json if config_json is not None else config_path.read_text(encoding="utf-8"))
     tables = config.get("tables", [])
     if not isinstance(tables, list):
         raise ValueError("ar.json 的 tables 必须是列表")

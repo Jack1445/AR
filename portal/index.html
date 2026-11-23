@@ -4,25 +4,60 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#ffffff">
-  <title>AR · 人才与机会</title>
+  <title>TALENT · 人才与机会</title>
+  <link rel="icon" href="/assets/talent-wordmark.svg?v=1" type="image/svg+xml">
   <link rel="stylesheet" href="/assets/portal.css">
   <script src="/assets/portal.js" defer></script>
 </head>
 <body>
-  <header class="topbar"><div class="topbar-inner"><a class="brand" href="#"><span class="brand-mark">A<span>R</span></span><span>AR <small>人才与机会</small></span></a><div class="top-actions"><span id="roleBadge" class="role-badge"></span><button id="logout" class="text-button" type="button" hidden>退出登录</button></div></div></header>
+  <header class="topbar"><div class="topbar-inner"><a class="brand" href="#" aria-label="TALENT 人才与机会"><img class="brand-mark" src="/assets/talent-wordmark.svg?v=1" alt="TALENT"></a><div class="top-actions"><span id="roleBadge" class="role-badge"></span><button id="logout" class="text-button" type="button" hidden>退出登录</button></div></div></header>
   <main class="container">
     <section id="auth" class="auth-layout">
-      <div class="auth-intro"><span class="eyebrow">AR / TALENT & OPPORTUNITY</span><h1 id="authTitle"></h1><p id="authSubtitle"></p><div class="graphic" aria-hidden="true"><span class="graphic-node one"></span><span class="graphic-node two"></span><span class="graphic-node three"></span><span class="graphic-node four"></span><span class="graphic-line a"></span><span class="graphic-line b"></span><span class="graphic-line c"></span><span class="graphic-core">AR</span></div></div>
-      <div class="auth-card"><div class="tabs"><button id="loginTab" class="tab active" type="button">登录</button><button id="registerTab" class="tab" type="button">注册</button></div><form id="authForm"><h2 id="formTitle">欢迎回来</h2><label>手机号<input id="phone" type="tel" inputmode="numeric" autocomplete="tel" pattern="1[3-9][0-9]{9}" maxlength="11" placeholder="请输入手机号" required></label><label>密码<input id="password" type="password" autocomplete="current-password" minlength="5" placeholder="至少 5 位" required></label><button id="authSubmit" class="primary" type="submit">登录</button><p id="authMessage" class="message" role="status"></p></form></div>
+      <div class="auth-intro">
+        <span class="eyebrow"><i></i> AR / TALENT &amp; OPPORTUNITY</span>
+        <h1 id="authTitle"></h1>
+        <p id="authSubtitle"></p>
+        <div class="auth-network" aria-hidden="true">
+          <span class="network-halo halo-one"></span><span class="network-halo halo-two"></span>
+          <span class="network-orbit orbit-one"></span><span class="network-orbit orbit-two"></span>
+          <span class="network-path path-one"></span><span class="network-path path-two"></span><span class="network-path path-three"></span>
+          <span class="network-point point-one"><i></i><em>候选人</em></span>
+          <span class="network-point point-two"><i></i><em>校友企业</em></span>
+          <span class="network-point point-three"><i></i><em>机会</em></span>
+          <span class="network-core"><span></span><img src="/assets/talent-wordmark.svg?v=1" alt=""></span>
+        </div>
+        <div class="auth-benefits" aria-hidden="true"><span>精准机会连接</span><span>推荐由你掌控</span></div>
+      </div>
+      <div class="auth-card">
+        <div class="auth-card-glow" aria-hidden="true"></div>
+        <div id="oauthLogin" hidden><span class="auth-card-kicker">WELCOME BACK</span><h2>欢迎回来</h2><p>使用奇绩账号登录后继续。</p><a id="oauthLink" class="primary" href="#">使用奇绩账号登录</a><p id="oauthMessage" class="message" role="status"></p></div>
+        <div id="localLogin"><div class="tabs"><button id="loginTab" class="tab active" type="button">登录</button><button id="registerTab" class="tab" type="button">注册</button></div><form id="authForm"><span class="auth-card-kicker">WELCOME TO AR</span><h2 id="formTitle">欢迎回来</h2><p class="auth-form-hint">连接校友网络，发现下一次可能。</p><label>手机号<input id="phone" type="tel" inputmode="numeric" autocomplete="tel" pattern="1[3-9][0-9]{9}" maxlength="11" placeholder="请输入手机号" required></label><label>密码<input id="password" type="password" autocomplete="current-password" minlength="5" placeholder="至少 5 位" required></label><button id="authSubmit" class="primary" type="submit"><span>登录</span></button><p id="authMessage" class="message" role="status"></p></form></div>
+      </div>
     </section>
     <section id="dashboard" hidden>
       <div class="page-heading"><div><span class="eyebrow" id="dashboardEyebrow"></span><h1 id="dashboardTitle"></h1><p id="dashboardSubtitle"></p></div><span id="accountPhone" class="account-phone"></span></div>
+      <section id="candidateUpload" class="candidate-upload-stage" hidden>
+        <div class="upload-aurora" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="upload-motion-orbit" aria-hidden="true"><span class="orbit-ring ring-one"></span><span class="orbit-ring ring-two"></span><i class="orbit-dot dot-one"></i><i class="orbit-dot dot-two"></i><i class="orbit-dot dot-three"></i></div>
+        <div class="candidate-upload-card">
+          <span class="upload-kicker"><i></i> AI RESUME ONBOARDING</span>
+          <h1>一键完成，让你的信息<br>被所有校友企业看到</h1>
+          <label id="candidateResumeButton" class="resume-upload-button" for="candidateResume"><span class="upload-button-icon">↗</span><span><strong>上传附件简历</strong><small>PDF、DOCX、TXT 或图片 · 最大 8 MB</small></span></label>
+          <input id="candidateResume" type="file" accept=".pdf,.docx,.txt,.png,.jpg,.jpeg" hidden>
+          <div id="candidateUploadProgress" class="candidate-upload-progress" hidden><span class="upload-spinner"></span><div><strong id="candidateUploadProgressTitle">正在读取你的简历</strong><small id="candidateUploadProgressText">AI 正在整理经历与求职信息…</small></div></div>
+          <p id="candidateUploadStatus" class="message upload-message" role="status"></p>
+          <span class="privacy-note">仅用于完善你的候选人资料</span>
+        </div>
+      </section>
       <div id="candidateChat" class="chat-layout" hidden>
         <section class="surface chat-surface"><div class="surface-heading"><span class="section-index">✦</span><div><h2>一起完成求职资料</h2><p>告诉我你的经历与求职意向</p></div></div><div id="chatMessages" class="chat-messages" role="log" aria-live="polite"></div><form id="chatForm" class="chat-composer"><label class="sr-only" for="chatInput">发送消息</label><textarea id="chatInput" rows="2" maxlength="4000" placeholder="说说你的经历、方向或求职意向…" required></textarea><button id="chatSend" class="primary" type="submit">发送 ↗</button></form><div class="chat-bottom"><button id="manualFill" class="text-button" type="button">手动填写 →</button></div></section>
         <aside class="surface chat-progress"><div class="surface-heading"><span class="section-index">01</span><div><h2>已收集的资料</h2><p>点击资料即可修改</p></div></div><div id="chatCollected" class="chat-collected"></div><div class="chat-upload"><label class="file-picker" for="chatResume">上传简历</label><input id="chatResume" type="file" accept=".pdf,.docx,.txt,.png,.jpg,.jpeg" hidden><span id="chatResumeName">PDF、DOCX、TXT、图片 · 最大 8 MB</span></div><button id="chatConfirm" class="primary chat-confirm" type="button">确认提交</button><p id="chatStatus" class="message" role="status"></p></aside>
       </div>
       <div id="candidateDashboard" hidden>
-        <div class="candidate-grid"><section class="surface resume-surface"><div id="submittedBanner" class="submitted-banner" hidden>✓ 已提交 · 你的资料已保存，可以随时修改</div><div class="surface-heading"><span class="section-index">01</span><div><h2>我的简历</h2><p>填写资料，随时更新</p></div><button id="backToChat" class="text-button back-to-chat" type="button" hidden>返回 AI 对话</button></div><form id="profileForm"><div id="candidateFields" class="candidate-fields"></div><label>补充说明<textarea id="candidateDescription" maxlength="12000" rows="4" placeholder="其他经历或求职意向（选填）"></textarea></label><button class="primary save-button" type="submit">保存资料</button></form></section><section class="surface status-surface"><div class="surface-heading"><span class="section-index">02</span><div><h2>推荐状态</h2><p>由你决定是否继续推荐</p></div></div><div class="status-control"><span id="candidateStatus" class="status-pill"></span><button id="toggleCandidate" type="button" class="outline"></button></div></section></div>
+        <div class="candidate-editor-shell">
+          <div class="candidate-editor-toolbar"><div><span class="eyebrow">PROFILE REVIEW</span><h2>确认你的候选人信息</h2><p>AI 已根据简历预填，补齐标记项后即可提交。</p></div><div class="recommendation-toggle"><div><span id="candidateStatus" class="status-pill"></span><small>允许校友企业发现我</small></div><button id="toggleCandidate" type="button" class="recommendation-switch" role="switch" aria-label="切换推荐状态"><span></span></button></div></div>
+          <section class="surface resume-surface candidate-editor-card"><div id="submittedBanner" class="submitted-banner" hidden>✓ 已提交 · 你的资料已保存，可以随时修改</div><div id="analysisBanner" class="analysis-banner" hidden><span>✦</span><div><strong>AI 解析完成</strong><p id="analysisSummary">请检查预填结果，并补齐橘红色标记的必填内容。</p></div></div><div class="surface-heading candidate-form-heading"><span class="section-index">01</span><div><h2>个人信息</h2><p>内容会按照原有格式保存至候选人资料</p></div><button id="backToChat" class="text-button back-to-chat" type="button" hidden>返回</button></div><form id="profileForm" novalidate><div id="candidateFields" class="candidate-fields"></div><label class="description-field">补充说明<textarea id="candidateDescription" maxlength="12000" rows="4" placeholder="其他经历或求职意向（选填）"></textarea></label><div class="candidate-form-actions"><span id="requiredHint">请补齐所有橘红色必填项</span><button class="primary save-button" type="submit">确认并保存资料</button></div></form></section>
+        </div>
       </div>
       <div id="alumniDashboard" hidden>
         <section class="alumni-toolbar surface"><div><span class="eyebrow">RECRUITMENT WORKSPACE</span><h2 id="alumniCompanyTitle">企业招聘</h2><p id="alumniOverview">管理岗位与推荐候选人</p></div><div class="alumni-toolbar-actions"><button id="openCompanyDialog" class="outline" type="button">企业信息</button><button id="openJobDialog" class="primary" type="button">＋ 新增 JD</button></div></section>

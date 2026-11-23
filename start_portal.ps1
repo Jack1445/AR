@@ -5,6 +5,8 @@ $project = $PSScriptRoot
 $url = 'http://127.0.0.1:38480/'
 Set-Location -LiteralPath $project
 . (Join-Path $project 'python_runtime.ps1')
+. (Join-Path $project 'local_postgres.ps1')
+Initialize-ARLocalPostgres
 $projectPython = Join-Path $project '.venv\Scripts\python.exe'
 if (Test-Path -LiteralPath $projectPython -PathType Leaf) { $python = $projectPython }
 else { $python = Find-ARPython }
@@ -31,7 +33,7 @@ function Test-CurrentPortal {
             $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
             try {
                 $health = $reader.ReadToEnd() | ConvertFrom-Json
-                return ([int]$health.candidate_chat -eq 12 -and $health.local_recommendations -eq $true -and [int]$health.alumni_company_fields -eq 1 -and [int]$health.portal_revision -eq 10)
+                return ([int]$health.candidate_chat -eq 12 -and $health.local_recommendations -eq $true -and [int]$health.alumni_company_fields -eq 1 -and [int]$health.portal_revision -eq 15)
             }
             finally { $reader.Close() }
         } finally { $response.Close() }

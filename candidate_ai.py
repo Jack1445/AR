@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import base64
+import io
 import os
 import re
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
+from xml.etree import ElementTree
 
 from ai_settings import _NoRedirect, _valid_base_url
 from credentials import _keyring
@@ -26,10 +30,16 @@ DEFAULT_PROMPT = (
 
 
 def _key() -> str:
+    if "CANDIDATE_AI_API_KEY" in os.environ:
+        return os.environ["CANDIDATE_AI_API_KEY"]
     return _keyring().get_password(SERVICE, ACCOUNT) or ""
 
 
 def read_settings() -> dict:
+    if "CANDIDATE_AI_BASE_URL" in os.environ:
+        return {"base_url": _valid_base_url(os.environ["CANDIDATE_AI_BASE_URL"]),
+                "model": os.environ.get("CANDIDATE_AI_MODEL", ""), "models": [],
+                "prompt": DEFAULT_PROMPT, "has_key": bool(_key())}
     try:
         data = json.loads(CONFIG.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -190,6 +200,112 @@ def _date_from_answer(value: str) -> str | None:
         return date(*(int(part) for part in match.groups())).isoformat()
     except ValueError:
         return None
+
+
+def _resume_text(content: bytes, name: str) -> str:
+    """Extract bounded plain text from a candidate resume without persisting it."""
+    suffix = Path(name).suffix.lower()
+    try:
+        if suffix == ".pdf":
+            from pypdf import PdfReader
+            parts = [(page.extract_text() or "") for page in PdfReader(io.BytesIO(content)).pages[:80]]
+            text = "\n".join(parts)
+        elif suffix == ".docx":
+            parts = []
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                names = [item for item in archive.namelist() if item == "word/document.xml" or re.fullmatch(r"word/(?:header|footer)\d+\.xml", item)]
+                for item in names:
+                    root = ElementTree.fromstring(archive.read(item))
+                    parts.extend(node.text for node in root.iter() if node.tag.endswith("}t") and node.text)
+            text = "\n".join(parts)
+        elif suffix == ".txt":
+            for encoding in ("utf-8-sig", "gb18030", "utf-16"):
+                try:
+                    text = content.decode(encoding)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            else:
+                text = content.decode("utf-8", errors="replace")
+        else:
+            return ""
+    except (ValueError, KeyError, OSError, zipfile.BadZipFile):
+        raise ValueError("无法读取这份简历，请确认文件未损坏") from None
+    text = re.sub(r"[ \t\u00a0]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text[:60000]
+
+
+def parse_resume(content: bytes, name: str, schema: list[dict], values: dict) -> dict:
+    """Use the configured candidate model to map one resume onto editable Feishu fields."""
+    settings = read_settings()
+    if not settings["base_url"] or not settings["model"]:
+        raise ValueError("候选人 AI 尚未配置，简历已上传，请手动补充资料")
+    key = _key()
+    if not key and not settings["base_url"].startswith(("http://127.0.0.1", "http://localhost")):
+        raise ValueError("候选人 AI 尚未设置 API Key，简历已上传，请手动补充资料")
+    editable = {item["name"]: item for item in schema if not item["readonly"] and item["type"] != 17}
+    fields_description = [{"name": item["name"], "type": item["type"], "options": item.get("options", []), "required": item["required"]} for item in editable.values()]
+    system = (
+        "你是严谨的中文简历信息提取器。只使用简历中明确出现的信息，不猜测、不补造。"
+        "把内容映射到给定字段；单选只能返回允许选项之一，多选返回允许选项数组，日期返回 YYYY-MM-DD。"
+        "无法确定的字段不要返回。仅返回合法 JSON 对象，格式为 {\"fields\":{\"准确字段名\":\"提取值\"}}。\n\n"
+        + json.dumps({"字段": fields_description, "已有资料": {name: value for name, value in values.items() if name in editable and value}}, ensure_ascii=False)
+    )
+    text = _resume_text(content, name)
+    if text:
+        user_content: str | list = f"请解析这份简历（文件名：{name}）：\n\n{text}"
+    elif Path(name).suffix.lower() in {".png", ".jpg", ".jpeg"}:
+        mime = "image/png" if name.lower().endswith(".png") else "image/jpeg"
+        user_content = [
+            {"type": "text", "text": "请阅读这张简历图片并提取字段。"},
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{base64.b64encode(content).decode('ascii')}"}},
+        ]
+    else:
+        raise ValueError("没有从简历中读取到文字，简历已上传，请手动补充资料")
+    body = json.dumps({"model": settings["model"], "messages": [{"role": "system", "content": system}, {"role": "user", "content": user_content}]}, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    request = urllib.request.Request(settings["base_url"] + "/chat/completions", data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.build_opener(_NoRedirect).open(request, timeout=120) as response:
+            raw = response.read(1024 * 1024 + 1)
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(f"简历解析 AI 返回 HTTP {error.code}") from None
+    except (urllib.error.URLError, TimeoutError):
+        raise RuntimeError("无法连接简历解析 AI，简历已上传，请手动补充资料") from None
+    if len(raw) > 1024 * 1024:
+        raise RuntimeError("简历解析 AI 响应过大")
+    try:
+        answer = json.loads(raw)["choices"][0]["message"]["content"]
+        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", answer.strip(), flags=re.IGNORECASE)
+        result = json.loads(cleaned[cleaned.index("{"):cleaned.rindex("}") + 1])
+        proposed = result.get("fields", {})
+        if not isinstance(proposed, dict):
+            raise ValueError
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+        raise RuntimeError("简历解析 AI 返回格式不兼容，请手动补充资料") from None
+    fields = {}
+    for field_name, value in proposed.items():
+        field = editable.get(field_name)
+        if not field:
+            continue
+        if field["type"] == 1 and isinstance(value, str) and value.strip():
+            fields[field_name] = value.strip()[:80 if field_name == "姓名" else 12000]
+        elif field["type"] == 3 and isinstance(value, str):
+            if option := _choice(value, field["options"]):
+                fields[field_name] = option
+        elif field["type"] == 4 and isinstance(value, (list, str)):
+            items = value if isinstance(value, list) else _split_choices(value)
+            options = [_choice(item, field["options"]) for item in items if isinstance(item, str)]
+            options = [item for item in options if item]
+            if options:
+                fields[field_name] = list(dict.fromkeys(options))
+        elif field["type"] == 5 and isinstance(value, str):
+            if normalized := _date_from_answer(value):
+                fields[field_name] = normalized
+    return {"fields": fields, "text_characters": len(text)}
 
 
 def chat_reply(history: list, draft: dict, schema: list[dict], values: dict) -> dict:

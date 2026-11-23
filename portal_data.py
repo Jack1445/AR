@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import re
 import secrets
 import threading
@@ -18,9 +19,14 @@ import recommendation_store
 
 
 WRITE_LOCK = threading.RLock()
+
+class MpLoginError(ValueError):
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(message)
 PREFIX = "AR_"
-CANDIDATE_FIELDS = ["AR_记录类型", "AR_手机号", "AR_密码摘要", "AR_姓名", "AR_简历说明", "AR_推荐状态", "AR_来源记录ID", "AR_更新时间", "AR_提交状态", "AR_已推荐JD", "AR_录用JD"]
-ALUMNI_FIELDS = ["AR_记录类型", "AR_手机号", "AR_密码摘要", "AR_账户ID", "AR_企业名称", "AR_联系人手机号", "AR_岗位名称", "AR_JD正文", "AR_招聘状态", "AR_来源JD", "AR_已录用候选人", "AR_更新时间"]
+CANDIDATE_FIELDS = ["AR_记录类型", "AR_手机号", "AR_密码摘要", "AR_MP用户ID", "AR_姓名", "AR_简历说明", "AR_推荐状态", "AR_来源记录ID", "AR_更新时间", "AR_提交状态", "AR_已推荐JD", "AR_录用JD"]
+ALUMNI_FIELDS = ["AR_记录类型", "AR_手机号", "AR_密码摘要", "AR_MP用户ID", "AR_账户ID", "AR_企业名称", "AR_联系人手机号", "AR_岗位名称", "AR_JD正文", "AR_招聘状态", "AR_来源JD", "AR_已录用候选人", "AR_更新时间"]
 CANDIDATE_NAME_FIELD = "姓名"
 CANDIDATE_PHONE_FIELD = "手机号/微信号"
 SOURCE_CANDIDATE_NAME_FIELD = "姓名"
@@ -41,11 +47,15 @@ ALLOWED_WRITES = {"candidate_output", "alumni_output"}
 def _table(kind: str) -> str:
     if kind not in ALLOWED_WRITES:
         raise ValueError("门户只能写入两张 AR 表")
-    return next(item["id"] for item in TABLES if item["kind"] == kind)
+    table_id = next((item["id"] for item in TABLES if item["kind"] == kind), None)
+    if table_id is None:
+        raise ValueError(f"门户配置缺少 {kind} 表")
+    return table_id
 
 
 def _client() -> tuple[Client, str]:
-    config = json.loads((ROOT / "ar.json").read_text(encoding="utf-8"))
+    config_json = os.environ.get("AR_CONFIG_JSON")
+    config = json.loads(config_json if config_json is not None else (ROOT / "ar.json").read_text(encoding="utf-8"))
     app_token, _ = identifiers(config["base_url"])
     return Client(*get_credentials()), app_token
 
@@ -143,7 +153,7 @@ def ensure_schema() -> dict:
 
 def _phone(value: str) -> str:
     if not isinstance(value, str) or not re.fullmatch(r"1[3-9]\d{9}", value.strip()):
-        raise ValueError("请输入 11 位中国大陆手机号")
+        raise MpLoginError("invalid_phone", "奇绩账号未提供有效的中国大陆手机号")
     return value.strip()
 
 
@@ -203,6 +213,37 @@ def login(role: str, phone: str, password: str) -> dict:
     if not account or not _verify_password(password, _field(account, "AR_密码摘要")):
         raise ValueError("手机号或密码错误")
     return {"id": account["record_id"], "role": role, "phone": phone}
+
+
+def login_with_mp(role: str, subject: str, phone: str) -> dict:
+    """Bind by mp's stable user ID, never claim an unbound account by phone alone."""
+    _kind(role)
+    if not isinstance(subject, str) or not subject or len(subject) > 120:
+        raise ValueError("mp 用户身份无效")
+    phone = _phone(phone)
+    client, app_token = _client()
+    with WRITE_LOCK:
+        rows = [row for row in _records(client, app_token, _kind(role)) if _field(row, "AR_记录类型") == "account"]
+        account = next((row for row in rows if _field(row, "AR_MP用户ID") == subject), None)
+        if account:
+            if _field(account, "AR_手机号") != phone:
+                raise MpLoginError("phone_mismatch", "mp 手机号与已绑定账户不一致，请联系管理员核实")
+            return {"id": account["record_id"], "role": role, "phone": phone}
+        phone_matches = [row for row in rows if _field(row, "AR_手机号") == phone]
+        has_unbound_match = len(phone_matches) == 1 and _field(phone_matches[0], "AR_MP用户ID") in (None, "")
+        if has_unbound_match:
+            record_id = phone_matches[0]["record_id"]
+            _update(client, app_token, _kind(role), record_id, {"AR_MP用户ID": subject, "AR_更新时间": _now()})
+            return {"id": record_id, "role": role, "phone": phone}
+        if phone_matches:
+            raise MpLoginError("phone_in_use", "该手机号已有账户，请联系管理员核实并绑定 mp 用户 ID")
+        fields = {"AR_记录类型": "account", "AR_手机号": phone, "AR_MP用户ID": subject, "AR_更新时间": _now()}
+        if role == "candidate":
+            fields.update({"AR_推荐状态": "开启", CANDIDATE_PHONE_FIELD: phone})
+        else:
+            fields["AR_联系人手机号"] = phone
+        record = _create(client, app_token, _kind(role), fields)
+        return {"id": record["record_id"], "role": role, "phone": phone}
 
 
 def account_data(identity: dict) -> dict:

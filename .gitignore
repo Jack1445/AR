@@ -4,6 +4,9 @@ __pycache__/
 .env.*
 setup-feishu-credentials.ps1
 .venv/
+.postgresql/
+.postgresql-data/
+postgres-local.log
 ar.json
 ar.json.bak
 downloads/

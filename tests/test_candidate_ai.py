@@ -1,6 +1,9 @@
 import json
+import io
+import os
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,6 +26,40 @@ class FakeKeyring:
 
 
 class CandidateAITests(unittest.TestCase):
+    def test_resume_text_extracts_txt_and_docx(self):
+        self.assertIn("产品经理", candidate_ai._resume_text("张三\n产品经理".encode(), "resume.txt"))
+        document = b'<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Python engineer</w:t></w:r></w:p></w:body></w:document>'
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w") as archive:
+            archive.writestr("word/document.xml", document)
+        self.assertEqual(candidate_ai._resume_text(output.getvalue(), "resume.docx"), "Python engineer")
+
+    def test_parse_resume_maps_model_output_to_existing_schema(self):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *_args): return None
+            def read(self, _size):
+                return json.dumps({"choices": [{"message": {"content": '{"fields":{"姓名":"张三","意向岗位":"产品","最早到岗时间":"2026年12月1日","不存在":"忽略"}}'}}]}).encode("utf-8")
+        class Opener:
+            def open(self, *_args, **_kwargs): return Response()
+        schema = [
+            {"name": "姓名", "type": 1, "options": [], "required": True, "readonly": False},
+            {"name": "意向岗位", "type": 3, "options": ["产品经理", "技术开发"], "required": True, "readonly": False},
+            {"name": "最早到岗时间", "type": 5, "options": [], "required": True, "readonly": False},
+            {"name": "手机号", "type": 1, "options": [], "required": True, "readonly": True},
+        ]
+        settings = {"base_url": "https://example.com/v1", "model": "test-model", "prompt": "unused"}
+        with patch.object(candidate_ai, "read_settings", return_value=settings), patch.object(candidate_ai, "_key", return_value="test-key"), patch.object(candidate_ai.urllib.request, "build_opener", return_value=Opener()):
+            result = candidate_ai.parse_resume("张三，产品经理".encode(), "resume.txt", schema, {})
+        self.assertEqual(result["fields"], {"姓名": "张三", "意向岗位": "产品经理", "最早到岗时间": "2026-12-01"})
+        self.assertGreater(result["text_characters"], 0)
+
+    def test_deployment_settings_use_environment_without_keyring(self):
+        with patch.dict(os.environ, {"CANDIDATE_AI_BASE_URL": "https://ai.example.com", "CANDIDATE_AI_MODEL": "model-x", "CANDIDATE_AI_API_KEY": "secret"}), patch.object(candidate_ai, "_keyring", side_effect=AssertionError("keyring used")):
+            settings = candidate_ai.read_settings()
+            self.assertEqual((settings["base_url"], settings["model"], settings["has_key"]), ("https://ai.example.com/v1", "model-x", True))
+            self.assertEqual(candidate_ai._key(), "secret")
+
     def test_completed_profile_sends_separate_optional_suggestion(self):
         class Response:
             def __enter__(self): return self

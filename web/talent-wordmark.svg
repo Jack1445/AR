@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 258 64" role="img" aria-label="TALENT">
+  <rect width="258" height="64" rx="7" fill="#050505"/>
+  <g transform="translate(20 13) scale(.218)" fill="#fff">
+    <path d="M0 0H142L123 32H86V174H46V32H0Z"/>
+    <path fill-rule="evenodd" d="M210 0H250L318 174H274L259 132H199L184 174H142L210 0ZM211 98H247L229 46Z"/>
+    <path d="M342 0H382V139H471V174H342Z"/>
+    <path d="M496 0H626V34H536V68H617V101H536V140H630V174H496Z"/>
+    <path d="M656 0H696L779 112V0H819V174H780L696 61V174H656Z"/>
+    <path d="M845 0H987L968 32H931V174H891V32H845Z"/>
+  </g>
+</svg>

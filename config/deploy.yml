@@ -1,0 +1,51 @@
+<% require "dotenv"; Dotenv.load(".env") %>
+service: alumni-talent
+image: qjctrd/alumni-talent
+
+servers:
+  web:
+    - alumni-talent
+
+ssh:
+  user: devops
+
+registry:
+  server: ghcr.io
+  username: qjctrd
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+proxy:
+  ssl: true
+  host: match.miracleplus.com
+  app_port: 38480
+  healthcheck:
+    path: /up
+
+env:
+  clear:
+    AR_PORTAL_ORIGIN: https://match.miracleplus.com
+    MP_OAUTH_URL: https://build.miracleplus.com
+    DATABASE_URL: <%= ENV.fetch("DATABASE_URL") %>
+    FEISHU_APP_ID: <%= ENV.fetch("FEISHU_APP_ID") %>
+    FEISHU_APP_SECRET: <%= ENV.fetch("FEISHU_APP_SECRET") %>
+    MP_OAUTH_CLIENT_ID: <%= ENV.fetch("MP_OAUTH_CLIENT_ID") %>
+    MP_OAUTH_CLIENT_SECRET: <%= ENV.fetch("MP_OAUTH_CLIENT_SECRET") %>
+    CANDIDATE_AI_BASE_URL: <%= ENV.fetch("CANDIDATE_AI_BASE_URL") %>
+    CANDIDATE_AI_MODEL: <%= ENV.fetch("CANDIDATE_AI_MODEL") %>
+    CANDIDATE_AI_API_KEY: <%= ENV.fetch("CANDIDATE_AI_API_KEY") %>
+
+builder:
+  context: .
+  arch: amd64
+
+accessories:
+  db:
+    image: postgres:16
+    host: alumni-talent
+    env:
+      clear:
+        POSTGRES_DB: alumni_talent
+        POSTGRES_PASSWORD: <%= ENV.fetch("POSTGRES_PASSWORD") %>
+    directories:
+      - postgres-data:/var/lib/postgresql/data
