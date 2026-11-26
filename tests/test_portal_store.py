@@ -1,3 +1,4 @@
+import copy
 import os
 import threading
 import time
@@ -7,6 +8,7 @@ from unittest.mock import patch
 import portal_data
 import portal_store
 import portal_sync
+import account_admin
 import recommendation_store
 from tests.pg_test import isolated_schema
 
@@ -61,6 +63,10 @@ class PortalStoreTests(unittest.TestCase):
         self.assertEqual(portal_store.delete_records("candidate_output", ["recOne"]), 1)
         self.assertIsNone(portal_store.get_record("candidate_output", "recOne"))
         self.assertIsNone(portal_store.get_preference("recOne", "job_order"))
+        self.assertEqual(portal_store.pending_deletions()[0]["feishu_record_id"], "recOne")
+        self.assertIsNone(portal_store.mirror_record("candidate_output", {
+            "record_id": "recOne", "fields": {"AR_记录类型": "account"}
+        }))
 
     def test_update_helper_marks_feishu_response_as_partial(self):
         class PartialUpdateClient(FakeClient):
@@ -147,12 +153,66 @@ class PortalStoreTests(unittest.TestCase):
         portal_store.save_schema("candidate_output", schema)
         self.assertEqual(portal_store.get_schema("candidate_output"), schema)
 
+    def test_attachment_cache_round_trip_and_prune(self):
+        portal_store.mirror_record("candidate_output", {
+            "record_id": "recOne", "fields": {"简历": [{"file_token": "fileOne"}]}
+        })
+        portal_store.save_attachment("candidate_output", "recOne", "简历", {
+            "file_token": "fileOne", "name": "resume.txt", "content_type": "text/plain",
+        }, b"resume content")
+        cached = portal_store.get_attachment("candidate_output", "recOne", "简历", "fileOne")
+        self.assertEqual(cached["content"], b"resume content")
+        self.assertEqual(cached["name"], "resume.txt")
+        self.assertEqual(portal_store.prune_attachments("candidate_output", "recOne", "简历", []), 1)
+        self.assertIsNone(portal_store.get_attachment("candidate_output", "recOne", "简历", "fileOne"))
+
+    def test_feishu_pull_caches_attachment_bytes_in_sql(self):
+        class AttachmentClient(FakeClient):
+            def download_attachment(self, item, path):
+                path.write_bytes(b"downloaded resume")
+
+        client = AttachmentClient()
+        client.rows["candidate_output"].append({"record_id": "recOne", "fields": {
+            "简历": [{"file_token": "fileOne", "name": "resume.txt"}],
+        }})
+        with patch.object(portal_data, "_table", side_effect=lambda kind: kind):
+            portal_sync.pull_from_feishu(client, "app")
+        cached = portal_store.get_attachment("candidate_output", "recOne", "简历", "fileOne")
+        self.assertEqual(cached["content"], b"downloaded resume")
+
+    def test_local_attachment_is_committed_before_background_feishu_upload(self):
+        class UploadClient(FakeClient):
+            def upload_attachment(self, path, _app_token):
+                self.uploaded = path.read_bytes()
+                return "remoteFileOne"
+
+        client = UploadClient()
+        client.fields["candidate_output"].append({"field_name": "AR_记录类型", "type": 1})
+        portal_store.merge_fields("candidate_output", "localOne", {"AR_记录类型": "account"})
+        portal_store.save_attachment("candidate_output", "localOne", "简历", {
+            "file_token": "local_attachment_one", "name": "resume.txt", "content_type": "text/plain",
+        }, b"local resume")
+        portal_store.merge_fields("candidate_output", "localOne", {
+            "简历": [{"file_token": "local_attachment_one", "name": "resume.txt"}],
+        })
+        self.assertEqual(portal_store.get_attachment(
+            "candidate_output", "localOne", "简历", "local_attachment_one")["sync_state"], "pending")
+        with patch.object(portal_data, "_table", side_effect=lambda kind: kind):
+            result = portal_sync.sync_pending_once(client, "app")
+        self.assertEqual(result, {"synced": 2, "failed": 0})
+        self.assertEqual(client.uploaded, b"local resume")
+        self.assertEqual(client.rows["candidate_output"][0]["fields"]["简历"][0]["file_token"], "remoteFileOne")
+        cached = portal_store.get_attachment(
+            "candidate_output", "localOne", "简历", "local_attachment_one")
+        self.assertEqual(cached["sync_state"], "synced")
+        self.assertEqual(cached["feishu_file_token"], "remoteFileOne")
+
     def test_portal_preference_stays_in_postgres_and_never_enters_sync_queue(self):
         portal_store.save_preference("account-one", "job_order", ["job-b", "job-a"])
         self.assertEqual(portal_store.get_preference("account-one", "job_order"), ["job-b", "job-a"])
         self.assertEqual(portal_store.pending_records(), [])
 
-    def test_stale_schema_is_used_when_feishu_is_unavailable(self):
+    def test_sql_schema_cache_is_used_without_calling_feishu(self):
         schema = [{"name": "姓名", "type": 1, "options": [], "required": True, "readonly": False}]
         portal_store.save_schema("candidate_output", schema)
 
@@ -161,7 +221,6 @@ class PortalStoreTests(unittest.TestCase):
                 raise RuntimeError("offline")
 
         with patch.dict(os.environ, {"AR_LOCAL_PRIMARY": "1"}), \
-             patch.object(portal_store, "get_schema", side_effect=[None, schema]), \
              patch.object(portal_data, "_table", return_value="candidate_output"):
             self.assertEqual(portal_data.candidate_form_schema(OfflineClient(), "app"), schema)
 
@@ -200,6 +259,18 @@ class PortalStoreTests(unittest.TestCase):
         self.assertEqual(result, {"synced": 0, "failed": 1})
         self.assertEqual(portal_store.get_record("candidate_output", "recOne")["sync_state"], "failed")
 
+    def test_sql_delete_is_queued_then_removed_from_feishu(self):
+        client = FakeClient()
+        remote = {"record_id": "recOne", "fields": {"AR_记录类型": "account", "AR_手机号": "13800138000"}}
+        client.rows["candidate_output"].append(copy.deepcopy(remote))
+        portal_store.mirror_record("candidate_output", remote)
+        portal_store.delete_records("candidate_output", ["recOne"])
+        self.assertEqual(len(portal_store.pending_deletions()), 1)
+        with patch.object(portal_data, "_table", side_effect=lambda kind: kind):
+            self.assertEqual(portal_sync.sync_pending_once(client, "app"), {"synced": 1, "failed": 0})
+        self.assertEqual(client.rows["candidate_output"], [])
+        self.assertEqual(portal_store.pending_deletions(), [])
+
 
 class LocalPrimaryCandidateTests(unittest.TestCase):
     def setUp(self):
@@ -226,10 +297,10 @@ class LocalPrimaryCandidateTests(unittest.TestCase):
         self.assertFalse(saved["enabled"])
         self.assertEqual(saved["sync"]["status"], "pending")
         self.assertEqual(len(self.client.writes), writes_before)
-        remote = self.client.rows["candidate_output"][0]["fields"]
-        self.assertNotEqual(remote.get("姓名"), "张三")
+        self.assertEqual(self.client.rows["candidate_output"], [])
         result = portal_sync.sync_pending_once(self.client, "app")
         self.assertEqual(result["synced"], 1)
+        remote = self.client.rows["candidate_output"][0]["fields"]
         self.assertEqual(remote["姓名"], "张三")
         self.assertEqual(remote["AR_推荐状态"], "停止")
 
@@ -244,6 +315,20 @@ class LocalPrimaryCandidateTests(unittest.TestCase):
         portal_sync.sync_pending_once(self.client, "app")
         self.assertEqual(len(self.client.writes), writes_before + 1)
         self.assertEqual(self.client.rows["candidate_output"][0]["fields"]["AR_推荐状态"], "开启")
+
+    def test_account_admin_create_and_delete_are_sql_first(self):
+        created = account_admin.create_account("candidate", "13800138000", "abcde")
+        self.assertTrue(created["id"].startswith("local_"))
+        self.assertEqual(self.client.rows["candidate_output"], [])
+        portal_sync.sync_pending_once(self.client, "app")
+        self.assertEqual(len(self.client.rows["candidate_output"]), 1)
+
+        deleted = account_admin.delete_account("candidate", created["id"], "13800138000")
+        self.assertTrue(deleted["deleted"])
+        self.assertIsNone(portal_store.get_record("candidate_output", created["id"]))
+        self.assertEqual(len(self.client.rows["candidate_output"]), 1)
+        portal_sync.sync_pending_once(self.client, "app")
+        self.assertEqual(self.client.rows["candidate_output"], [])
 
 
 class LocalPrimaryAlumniTests(unittest.TestCase):
@@ -272,10 +357,11 @@ class LocalPrimaryAlumniTests(unittest.TestCase):
         self.assertTrue(job["id"].startswith("local_"))
         self.assertEqual(len(self.client.writes), writes_before)
         self.assertEqual(len(portal_store.pending_records()), 2)
+        self.assertEqual(self.client.rows["alumni_output"], [])
 
         result = portal_sync.sync_pending_once(self.client, "app")
         self.assertEqual(result, {"synced": 2, "failed": 0})
-        remote_account = next(row for row in self.client.rows["alumni_output"] if row["record_id"] == owner["id"])
+        remote_account = next(row for row in self.client.rows["alumni_output"] if row["fields"].get("AR_记录类型") == "account")
         remote_job = next(row for row in self.client.rows["alumni_output"] if row["fields"].get("AR_记录类型") == "job")
         self.assertEqual(remote_account["fields"]["AR_企业名称"], "测试企业")
         self.assertEqual(remote_account["fields"]["填写人姓名"], "张三")

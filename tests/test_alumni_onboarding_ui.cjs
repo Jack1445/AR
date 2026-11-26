@@ -14,7 +14,11 @@ assert.equal(vm.runInContext('alumniOnboardingStep({company:"ACME", contact_name
 assert.equal(vm.runInContext('alumniOnboardingStep({company:"ACME", contact_name:"张三", contact_role:"HR"}, [{id:"jd"}])', context), "");
 
 const source = fs.readFileSync(path.join(__dirname, "..", "portal", "portal.js"), "utf8");
+const serverSource = fs.readFileSync(path.join(__dirname, "..", "portal_server.py"), "utf8");
 assert.match(source, /openCompanyEditor\(true\)/);
 assert.match(source, /openJobEditor\(\)/);
 assert.match(source, /contact_name:\s*contactName/);
 assert.match(source, /contact_role:\s*contactRole/);
+const frontendRevision = Number(source.match(/const requiredPortalRevision = (\d+);/)?.[1]);
+const backendRevision = Number(serverSource.match(/"portal_revision": (\d+)/)?.[1]);
+assert.equal(frontendRevision, backendRevision, "校友端前后端版本门禁必须一致");

@@ -40,6 +40,9 @@ class FakeClient:
         record_id = path.split("/records/")[-1] if "/records/" in path else None
         if method == "GET":
             return {"record": copy.deepcopy(next(row for row in self.rows[kind] if row["record_id"] == record_id))}
+        if method == "DELETE":
+            self.rows[kind] = [row for row in self.rows[kind] if row["record_id"] != record_id]
+            return {}
         unknown = set(body["fields"]) - {field["field_name"] for field in self.fields[kind]}
         if unknown:
             raise ValueError(f"FieldNameNotFound: {unknown}")
@@ -277,10 +280,9 @@ class PortalDataTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             portal_data.save_candidate(candidate, form_fields={"AR_密码摘要": "bad"})
 
-    def test_required_base_conditional_consent_and_attachment_removal(self):
+    def test_required_text_base_consent_and_attachment_removal(self):
         self.client.fields["candidate_output"].extend([
-            {"field_name": portal_data.BASE_FIELD, "type": 4, "property": {"options": [{"name": "北京/Beijing"}, {"name": "其他"}]}},
-            {"field_name": portal_data.BASE_OTHER_FIELD, "type": 1},
+            {"field_name": portal_data.BASE_FIELD, "type": 1},
             {"field_name": portal_data.CONSENT_FIELD, "type": 3, "property": {"options": [{"name": "是 Yes"}, {"name": "否 No"}, {"name": "其他"}]}},
             {"field_name": portal_data.CONSENT_OTHER_FIELD, "type": 1},
         ])
@@ -291,14 +293,9 @@ class PortalDataTests(unittest.TestCase):
         self.assertNotIn(portal_data.CONSENT_OTHER_FIELD, [item["name"] for item in schema])
         self.assertEqual(next(item["options"] for item in schema if item["name"] == portal_data.CONSENT_FIELD), ["是 Yes", "否 No"])
         with self.assertRaises(ValueError):
-            portal_data.save_candidate(candidate, form_fields={"姓名": "张三", portal_data.BASE_FIELD: []})
-        portal_data.save_candidate(candidate, form_fields={"姓名": "张三", portal_data.BASE_FIELD: ["其他"], portal_data.BASE_OTHER_FIELD: "海外", portal_data.CONSENT_FIELD: "是 Yes"})
-        self.assertEqual(row["fields"][portal_data.BASE_OTHER_FIELD], "海外")
-        portal_data.save_candidate(candidate, form_fields={"姓名": "张三", portal_data.BASE_FIELD: ["北京/Beijing"], portal_data.CONSENT_FIELD: "是 Yes"})
-        self.assertIsNone(row["fields"][portal_data.BASE_OTHER_FIELD])
-        row["fields"][portal_data.BASE_OTHER_FIELD] = "旧补充内容"
-        portal_data.save_candidate(candidate, form_fields={"姓名": "张三"})
-        self.assertIsNone(row["fields"][portal_data.BASE_OTHER_FIELD])
+            portal_data.save_candidate(candidate, form_fields={"姓名": "张三", portal_data.BASE_FIELD: ""})
+        portal_data.save_candidate(candidate, form_fields={"姓名": "张三", portal_data.BASE_FIELD: "北京,上海", portal_data.CONSENT_FIELD: "是 Yes"})
+        self.assertEqual(row["fields"][portal_data.BASE_FIELD], "北京,上海")
         portal_data.remove_candidate_attachment(candidate, "简历", 0)
         self.assertEqual(row["fields"]["简历"], [])
 

@@ -10,6 +10,7 @@ postgres-local.log
 ar.json
 ar.json.bak
 downloads/
+tmp/
 web/data.js
 web/data.js.tmp
 ai_config.json

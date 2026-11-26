@@ -9,13 +9,12 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from build_web import DATA, PUBLIC, TABLES, build_snapshot, read_json
+from build_web import DATA, PUBLIC, TABLES, read_json
 from ai_settings import fetch_models, read_settings, save_settings, test_connection as test_match_connection
 from candidate_ai import fetch_models as fetch_candidate_models, read_settings as read_candidate_settings, save_settings as save_candidate_settings, test_connection as test_candidate_connection
 from ai_history import get_call, list_calls
-from match_engine import confirm_recommendation, evaluate_item, public_state, tag_item, tag_plan
+from match_engine import confirm_recommendation, evaluate_item, hard_filter_plan, public_state, tag_item, tag_plan
 from recommendation_store import all_rows as all_recommendations
-from sync import sync_from_saved_credentials
 
 
 HOST = "127.0.0.1"
@@ -23,7 +22,7 @@ PORT = 38479
 SYNC_LOCK = threading.Lock()
 MIGRATION_LOCK = threading.Lock()
 LEGACY_MIGRATED = False
-ASSETS = {"index.html", "styles.css", "theme.css", "app.js", "accounts.js", "match.js", "ai_history.js", "data.js", "favicon.svg", "talent-wordmark.svg", "candidate-ai.html", "candidate-ai.css", "candidate-ai.js"}
+ASSETS = {"index.html", "styles.css", "theme.css", "app.js", "accounts.js", "match.js", "ai_history.js", "favicon.svg", "talent-wordmark.svg", "candidate-ai.html", "candidate-ai.css", "candidate-ai.js"}
 TABLE_IDS = {table["id"] for table in TABLES if table["kind"] in {"candidate_output", "alumni_output"} and not table["archived"]}
 
 
@@ -69,7 +68,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         path = urllib.parse.unquote(urllib.parse.urlparse(self.path).path)
         if path == "/health":
-            self._json(200, {"ok": True, "candidate_ai_test": 10, "match_confirm": True, "match_ai_test": 1, "account_admin": 2})
+            self._json(200, {"ok": True, "candidate_ai_test": 10, "match_confirm": True, "match_ai_test": 3, "account_admin": 2, "sql_primary": 3})
             return
         if path == "/api/accounts":
             try:
@@ -77,6 +76,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, list_accounts())
             except Exception:
                 self._json(500, {"error": "无法读取本地账号信息"})
+            return
+        if path == "/api/catalog":
+            try:
+                from sql_catalog import catalog
+                self._json(200, catalog())
+            except Exception:
+                self._json(500, {"error": "无法读取 PostgreSQL 主数据"})
             return
         if path == "/api/ai-config":
             try:
@@ -175,7 +181,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self._json(500, {"error": "新增账号失败，请检查飞书连接与本地数据库"})
             return
-        if self.path in {"/api/match-tag", "/api/match-tag-plan", "/api/match-evaluate", "/api/match-confirm"}:
+        if self.path in {"/api/match-tag", "/api/match-tag-plan", "/api/match-hard-filter", "/api/match-evaluate", "/api/match-confirm"}:
             if self.headers.get("X-AR-Match") != "1" or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                 self._bytes(403, b"Forbidden")
                 return
@@ -188,7 +194,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 payload = json.loads(self.rfile.read(length))
-                result = tag_plan(payload) if self.path == "/api/match-tag-plan" else tag_item(payload) if self.path == "/api/match-tag" else confirm_recommendation(payload) if self.path == "/api/match-confirm" else evaluate_item(payload)
+                result = hard_filter_plan(payload) if self.path == "/api/match-hard-filter" else tag_plan(payload) if self.path == "/api/match-tag-plan" else tag_item(payload) if self.path == "/api/match-tag" else confirm_recommendation(payload) if self.path == "/api/match-confirm" else evaluate_item(payload)
                 self._json(200, result)
             except (ValueError, json.JSONDecodeError) as error:
                 self._json(400, {"error": str(error)})
@@ -239,7 +245,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json(409, {"error": "正在检查飞书更新，请稍候。"})
             return
         try:
-            self._json(200, sync_from_saved_credentials())
+            from portal_sync import pull_from_feishu, sync_pending_once
+            pushed = sync_pending_once()
+            pulled = pull_from_feishu()
+            from portal_store import queue_summary
+            self._json(200, {"changed": True, "pushed": pushed, "pulled": pulled, "queue": queue_summary()})
         except Exception as error:
             self._json(500, {"error": str(error)})
         finally:
@@ -273,8 +283,14 @@ def main() -> None:
     from recommendation_store import ensure_schema as ensure_recommendations
     ensure_ai_history()
     ensure_recommendations()
-    if not (PUBLIC / "data.js").is_file():
-        build_snapshot()
+    from portal_store import ensure_schema as ensure_portal_store
+    from match_store import ensure_schema as ensure_match_store
+    ensure_portal_store()
+    ensure_match_store()
+    from match_store import migrate_legacy as migrate_legacy_match_state
+    migrate_legacy_match_state()
+    from portal_sync import start as start_portal_sync
+    sync_controller = start_portal_sync()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
     print(f"AR 本地网页：http://{HOST}:{PORT}/", flush=True)
@@ -283,6 +299,7 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        sync_controller.set()
         server.server_close()
 
 

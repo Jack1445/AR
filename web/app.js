@@ -54,7 +54,7 @@ function candidateView(record) {
   const name = compact(field(record, "姓名", "AR_姓名", "姓名 2", "名字"), 45) || "未命名候选人";
   const school = compact(field(record, "学校、专业、入学时间-毕业时间"), 80);
   const role = compact(field(record, "意向投递的目标公司或岗位", "意向投递公司/岗位（选填）", "请对你想在被投企业中做的具体岗位/方向，做个简易描述", "AR_简历说明"), 145);
-  const location = compact(field(record, "意向base地（可多选）", "意向base地（多选）"), 40);
+  const location = compact(field(record, "意向base地（eg.北京,上海）", "意向base地（可多选）", "意向base地（多选）"), 40);
   const summary = compact(field(record, "AR_简历说明", "请对你想在被投企业中做的具体岗位/方向，做个简易描述", "是什么原因让你决定申请被投企业联合招聘项目？", "学校、专业、入学时间-毕业时间"), 135);
   const tags = [location, compact(field(record, "你更想以什么角色加入奇绩的被投企业（多选） 2", "期望参与的工作类型"), 48)].filter(Boolean);
   return { title: name, subtitle: school || role || "候选人档案", summary, tags, date: dateOf(record), attachments: attachmentItems(record).length, avatar: name.slice(0, 1) };
@@ -157,7 +157,7 @@ function updateSummary() {
   $("jobHeadingCount").textContent = currentJobRecords().length;
   const activeTables = [candidates, jobs].filter(Boolean);
   const available = activeTables.filter((item) => item.available);
-  $("syncState").textContent = available.length === 2 ? "已同步" : `已同步 ${available.length}/2`;
+  $("syncState").textContent = available.length === 2 ? "SQL 已载入" : `SQL 已载入 ${available.length}/2`;
   const newest = Math.max(...available.map((item) => new Date(item.synced_at).getTime()), 0);
   $("syncTime").textContent = newest ? `最近读取 ${new Date(newest).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}` : "尚无本地数据";
   const missing = activeTables.filter((item) => !item.available).map((item) => item.name);
@@ -183,17 +183,9 @@ async function loadCatalog() {
   const button = $("refreshButton");
   button.disabled = true;
   try {
-    if (state.tables.length) {
-      await new Promise((resolve, reject) => {
-        const script = document.createElement("script");
-        script.src = `data.js?t=${Date.now()}`;
-        script.onload = resolve;
-        script.onerror = () => reject(new Error("无法重新读取 data.js"));
-        document.head.appendChild(script);
-      });
-    }
-    if (!window.AR_DATA) throw new Error("网页数据尚未生成，请运行 python build_web.py");
-    const payload = window.AR_DATA;
+    const response = await fetch(`/api/catalog?t=${Date.now()}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "读取失败");
     state.tables = payload.tables || [];
     updateSummary();
     renderList("candidate");
@@ -203,7 +195,7 @@ async function loadCatalog() {
   } catch (error) {
     $("syncState").textContent = "读取失败";
     $("missingNotice").hidden = false;
-    $("missingNotice").textContent = `读取本地数据失败：${error.message}。请运行 python build_web.py 后重新打开网页。`;
+    $("missingNotice").textContent = `读取 PostgreSQL 主数据失败：${error.message}。请确认本地数据库服务正在运行。`;
   } finally { button.disabled = false; }
 }
 function showSyncFeedback(message, error = false) {
@@ -213,32 +205,23 @@ function showSyncFeedback(message, error = false) {
   notice.hidden = false;
 }
 async function syncFromFeishu() {
-  if (location.protocol === "file:") {
-    showSyncFeedback("当前是旧版本地文件页面。请关闭网页，重新双击“打开AR网页.cmd”后再检查飞书更新。", true);
-    return;
-  }
   const button = $("refreshButton");
   const label = button.querySelector(".refresh-label");
   button.disabled = true;
-  label.textContent = "正在检查…";
+  label.textContent = "正在同步…";
   $("syncFeedback").hidden = true;
   try {
     const response = await fetch("/api/sync", { method: "POST", headers: { "X-AR-Sync": "1" }, cache: "no-store" });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-    if (result.changed) {
-      await loadCatalog();
-      const activeIds = new Set([table("candidate_output", false)?.id, table("alumni_output", false)?.id]);
-      const changedTables = result.tables.filter((item) => item.changed && activeIds.has(item.id));
-      const detail = changedTables.map((item) => `${item.name}：新增 ${item.added}、修改 ${item.edited}、移除 ${item.removed}`).join("；");
-      showSyncFeedback(detail ? `已更新工作台数据。${detail}` : "已检查飞书：工作台数据没有变化。");
-    } else {
-      showSyncFeedback("已检查飞书：数据没有变化，本地文件未改动。");
-    }
+    await loadCatalog();
+    const pushed = result.pushed || {};
+    const count = Object.values(result.pulled || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+    showSyncFeedback(`同步完成：推送 ${Number(pushed.synced || 0)} 条，读取飞书 ${count} 条。`);
   } catch (error) {
     showSyncFeedback(`检查失败：${error.message}`, true);
   } finally {
-    label.textContent = "检查飞书更新";
+    label.textContent = "同步飞书";
     button.disabled = false;
   }
 }
@@ -260,7 +243,7 @@ function showView(view, navId, target) {
   document.querySelector(".breadcrumb strong").textContent = ({ overview: "总览", directory: "人才与岗位一览", ai: "AI 管理", match: "岗位匹配", data: "数据中心" })[view];
   requestAnimationFrame(() => (target ? $(target) : $("mainContent")).scrollIntoView({ behavior: "smooth", block: "start" }));
 }
-const DEFAULT_GLOBAL_PROMPT = `你是一位审慎的招聘匹配顾问。请根据候选人的真实资料与岗位 JD，评估是否值得推荐。\n\n评估维度：\n1. 必备技能、相关经历和岗位职责的吻合度。\n2. 地点、工作方式、入职时间等明确条件。\n3. 候选人的职业意向与企业提供的机会。\n\n输出每位候选人的匹配理由、待核实点和推荐优先级。只能引用资料中存在的事实；信息缺失时明确写“待核实”，不要推测或编造。`;
+const DEFAULT_GLOBAL_PROMPT = `你是一位审慎的招聘匹配顾问。请根据候选人的真实资料与岗位 JD，评估是否值得推荐。\n\n评估维度：\n1. 必备技能、相关经历和岗位职责的吻合度。\n2. 地点、工作方式、入职时间等明确条件。\n3. 候选人的职业意向与企业提供的机会。\n\n先给出一句话总览，再用最关键的简历事实、对应 JD 要求和评分逻辑解释当前分数。只能引用资料中存在的事实；信息缺失时明确写“简历未体现”，不要推测或编造。`;
 const JOB_FIELDS = ["开放岗位", "开放岗位2（若有更多的岗位也可一并汇总写在这一栏）"];
 function readPrompt(key) { try { return localStorage.getItem(key); } catch { return null; } }
 function jdHash(text) {

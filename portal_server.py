@@ -220,7 +220,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/health":
             queue = portal_store.queue_summary() if portal_store.enabled() else None
-            self._json(200, {"ok": True, "candidate_chat": 12, "local_recommendations": True, "alumni_company_fields": 2, "portal_revision": 31, "local_primary": portal_store.enabled(), "sync_queue": queue, "mp_oauth": bool(os.environ.get("MP_OAUTH_CLIENT_ID") and os.environ.get("MP_OAUTH_CLIENT_SECRET"))})
+            self._json(200, {"ok": True, "candidate_chat": 12, "local_recommendations": True, "alumni_company_fields": 2, "portal_revision": 35, "local_primary": portal_store.enabled(), "sync_queue": queue, "mp_oauth": bool(os.environ.get("MP_OAUTH_CLIENT_ID") and os.environ.get("MP_OAUTH_CLIENT_SECRET"))})
             return
         if path in {"/candidate/", "/alumni/"}:
             self._page("index.html")
@@ -272,11 +272,18 @@ class Handler(BaseHTTPRequestHandler):
         if not 0 <= index < len(files) or not isinstance(files[index], dict):
             raise ValueError("简历不存在")
         item = files[index]
-        client.authenticate()
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / safe_name(item.get("name") or "resume.pdf")
-            client.download_attachment(item, path)
-            content = path.read_bytes()
+        cached = portal_store.get_attachment("candidate_output", identity["id"], field_name,
+                                             str(item.get("file_token") or "")) if portal_store.enabled() else None
+        if cached:
+            content = cached["content"]
+        else:
+            if portal_store.enabled():
+                raise ValueError("简历文件尚未进入本地数据库，请刷新数据后重试")
+            client.authenticate()
+            with tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / safe_name(item.get("name") or "resume.pdf")
+                client.download_attachment(item, path)
+                content = path.read_bytes()
         filename = item.get("name") or "resume.pdf"
         content, content_type, disposition = resume_response(content, filename, query.get("download", ["0"])[0] == "1")
         name = urllib.parse.quote(filename)
@@ -302,19 +309,33 @@ class Handler(BaseHTTPRequestHandler):
         rec = recommendation_store.get(recommendation_id)
         if not rec:
             raise ValueError("推荐记录不存在")
-        client, app_token = _client()
         candidate_id = rec["candidate_id"]
-        _, table_id = _record_location("candidate", candidate_id)
-        record = client.request("GET", table_path(app_token, table_id) + "/records/" + candidate_id).get("record") or {}
+        record, table_id = _record_location("candidate", candidate_id)
+        if not record:
+            client, app_token = _client()
+            record = client.request("GET", table_path(app_token, table_id) + "/records/" + candidate_id).get("record") or {}
         files = (record.get("fields") or {}).get("简历") or []
         if not 0 <= index < len(files) or not isinstance(files[index], dict):
             raise ValueError("简历不存在")
         item = files[index]
-        client.authenticate()
-        with tempfile.TemporaryDirectory() as folder:
-            file = Path(folder) / safe_name(item.get("name") or "resume.pdf")
-            client.download_attachment(item, file)
-            content = file.read_bytes()
+        cached = portal_store.get_attachment("candidate_output", candidate_id, "简历",
+                                             str(item.get("file_token") or "")) if portal_store.enabled() else None
+        if cached:
+            content = cached["content"]
+        else:
+            if portal_store.enabled():
+                raise ValueError("简历文件尚未进入本地数据库，请刷新数据后重试")
+            client, app_token = _client()
+            remote_id = record.get("feishu_record_id") or candidate_id
+            remote = client.request("GET", table_path(app_token, table_id) + "/records/" + remote_id).get("record") or {}
+            remote_files = (remote.get("fields") or {}).get("简历") or []
+            if not 0 <= index < len(remote_files) or not isinstance(remote_files[index], dict):
+                raise ValueError("简历不存在")
+            client.authenticate()
+            with tempfile.TemporaryDirectory() as folder:
+                file = Path(folder) / safe_name(item.get("name") or "resume.pdf")
+                client.download_attachment(remote_files[index], file)
+                content = file.read_bytes()
         filename = item.get("name") or "resume.pdf"
         content, content_type, disposition = resume_response(content, filename, query.get("download", ["0"])[0] == "1")
         name = urllib.parse.quote(filename)
@@ -437,13 +458,30 @@ class Handler(BaseHTTPRequestHandler):
 
         if not isinstance(field_name, str) or not any(item["name"] == field_name and item["type"] == 17 for item in candidate_form_schema(client, app_token)):
             raise ValueError("附件字段无效")
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / safe_name(name)
-            path.write_bytes(content)
-            client.authenticate()
-            token = client.upload_attachment(path, app_token)
         with WRITE_LOCK:
-            _update(client, app_token, "candidate_output", identity["id"], {field_name: [{"file_token": token}], "AR_更新时间": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+            if portal_store.enabled():
+                token = "local_attachment_" + secrets.token_hex(20)
+                portal_store.save_attachment(
+                    "candidate_output", identity["id"], field_name,
+                    {"file_token": token, "name": name,
+                     "content_type": mimetypes.guess_type(name)[0] or "application/octet-stream"},
+                    content,
+                )
+                portal_store.merge_fields("candidate_output", identity["id"], {
+                    field_name: [{"file_token": token, "name": name}],
+                    "AR_更新时间": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                })
+                portal_store.prune_attachments("candidate_output", identity["id"], field_name, [token])
+            else:
+                with tempfile.TemporaryDirectory() as folder:
+                    path = Path(folder) / safe_name(name)
+                    path.write_bytes(content)
+                    client.authenticate()
+                    token = client.upload_attachment(path, app_token)
+                _update(client, app_token, "candidate_output", identity["id"], {
+                    field_name: [{"file_token": token}],
+                    "AR_更新时间": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                })
         profile = account_data(identity)
         if payload.get("analyze") is True and field_name == "简历":
             try:
@@ -474,6 +512,13 @@ def main() -> None:
         ensure_schema()
     except (ValueError, FeishuError, RuntimeError, OSError) as error:
         print(f"飞书门户初始化失败，配置修复后重启门户即可重试：{error}", flush=True)
+    if portal_store.enabled():
+        try:
+            from portal_sync import pull_from_feishu
+            counts = pull_from_feishu()
+            print(f"飞书镜像已导入 PostgreSQL：候选人 {counts.get('candidate_output', 0)} 行，校友 {counts.get('alumni_output', 0)} 行", flush=True)
+        except (ValueError, FeishuError, RuntimeError, OSError) as error:
+            print(f"飞书初始导入失败，将由后台同步自动重试：{error}", flush=True)
     try:
         from portal_data import sync_business_outcomes
         changed = sync_business_outcomes()

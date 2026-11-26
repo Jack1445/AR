@@ -6,7 +6,7 @@ from datetime import datetime
 
 import portal_store
 import recommendation_store
-from portal_data import (_client, _field, _path, register, sync_business_outcomes,
+from portal_data import (_field, register, sync_business_outcomes,
                          ALUMNI_CONTACT_NAME_FIELD, ALUMNI_CONTACT_ROLE_FIELD,
                          CANDIDATE_NAME_FIELD)
 
@@ -56,16 +56,10 @@ def list_accounts() -> dict:
 def create_account(role: str, phone: str, password: str) -> dict:
     if role not in KINDS:
         raise ValueError("账号类型无效")
-    # Refresh first so a remotely-created account cannot be duplicated locally.
-    from portal_sync import pull_from_feishu
-    pull_from_feishu()
     identity = register(role, phone, password)
-    # register() creates the Feishu row first; local-primary mode mirrors it immediately.
     row = portal_store.get_record(KINDS[role], identity["id"])
     if row is None:
-        client, app_token = _client()
-        remote = client.request("GET", _path(app_token, KINDS[role]) + "/records/" + identity["id"])["record"]
-        row = portal_store.mirror_record(KINDS[role], remote)
+        raise RuntimeError("账号未写入 PostgreSQL")
     return _account_item(role, row, _records(role), recommendation_store.all_rows())
 
 
@@ -87,16 +81,6 @@ def delete_account(role: str, account_id: str, expected_phone: str) -> dict:
     else:
         # Clean up legacy Feishu recommendation rows that directly reference this candidate.
         related = [row for row in portal_store.list_records("alumni_output") if _field({"fields": row["fields"]}, "AR_记录类型") == "recommendation" and _field({"fields": row["fields"]}, "AR_候选人ID") == account_id]
-
-    client, app_token = _client()
-    remote_targets = [(KINDS[role], account), *[("alumni_output", row) for row in related]]
-    remote_ids = {}
-    for target_kind in {kind for kind, _row in remote_targets}:
-        remote_ids[target_kind] = {str(row.get("record_id") or "") for row in client.pages(_path(app_token, target_kind) + "/records")}
-    for target_kind, row in remote_targets:
-        remote_id = row.get("feishu_record_id")
-        if remote_id and remote_id in remote_ids[target_kind]:
-            client.request("DELETE", _path(app_token, target_kind) + "/records/" + remote_id)
 
     deleted_recommendations = recommendation_store.delete_related(
         candidate_id=account_id if role == "candidate" else "",

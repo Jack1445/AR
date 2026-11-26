@@ -36,7 +36,7 @@ function Test-CurrentServer {
             $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
             try {
                 $health = $reader.ReadToEnd() | ConvertFrom-Json
-                return ([int]$health.candidate_ai_test -eq 10 -and $health.match_confirm -eq $true -and [int]$health.match_ai_test -eq 1 -and [int]$health.account_admin -eq 2)
+                return ([int]$health.candidate_ai_test -eq 10 -and $health.match_confirm -eq $true -and [int]$health.match_ai_test -eq 3 -and [int]$health.account_admin -eq 2 -and [int]$health.sql_primary -eq 3)
             }
             finally { $reader.Close() }
         } finally { $response.Close() }
@@ -63,11 +63,6 @@ function Stop-OutdatedARServer {
         Write-Host "Could not restart the old AR server: $($_.Exception.Message)"
     }
     return $false
-}
-
-if (-not (Test-Path -LiteralPath (Join-Path $project 'web\data.js') -PathType Leaf)) {
-    Write-Host 'Local data is missing. Run python ar.py pull --all-tables in your Python PowerShell first.'
-    exit 1
 }
 
 if ((Test-Server) -and -not (Test-CurrentServer)) {

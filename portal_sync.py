@@ -2,10 +2,38 @@
 
 from __future__ import annotations
 
+import mimetypes
+import tempfile
 import threading
 import time
+from pathlib import Path
 
 import portal_store
+
+
+def _cache_remote_attachments(client, kind: str, local_id: str, fields: dict) -> int:
+    """Download Feishu attachment bytes once and keep them beside the SQL record."""
+    cached = 0
+    for field_name, value in fields.items():
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if not isinstance(item, dict) or not item.get("file_token"):
+                continue
+            token = str(item["file_token"])
+            if portal_store.get_attachment(kind, local_id, field_name, token):
+                continue
+            name = str(item.get("name") or token)
+            with tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / "attachment"
+                client.download_attachment(item, path)
+                content = path.read_bytes()
+            metadata = dict(item)
+            metadata["name"] = name
+            metadata["content_type"] = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            portal_store.save_attachment(kind, local_id, field_name, metadata, content)
+            cached += 1
+    return cached
 
 
 class SyncController:
@@ -27,21 +55,50 @@ def sync_pending_once(client=None, app_token: str | None = None, limit: int = 25
     from portal_data import _path
 
     result = {"synced": 0, "failed": 0}
-    for item in portal_store.pending_records(limit):
-        try:
-            remote_id = item.get("feishu_record_id")
-            if remote_id:
-                record = client.request("PUT", _path(app_token, item["kind"]) + "/records/" + remote_id,
-                                        body={"fields": dict(item["pending_fields"])})["record"]
-            else:
-                record = client.request("POST", _path(app_token, item["kind"]) + "/records",
-                                        body={"fields": dict(item["fields"])})["record"]
-                remote_id = record["record_id"]
-            portal_store.mark_synced(item["kind"], item["local_id"], item["version"], remote_id)
-            result["synced"] += 1
-        except Exception as error:
-            portal_store.mark_failed(item["kind"], item["local_id"], item["version"], str(error))
-            result["failed"] += 1
+    with portal_store.sync_lock() as acquired:
+        if not acquired:
+            return result
+        for item in portal_store.pending_attachments(limit):
+            try:
+                from ar import safe_name
+                with tempfile.TemporaryDirectory() as folder:
+                    path = Path(folder) / safe_name(item.get("name") or "attachment.bin")
+                    path.write_bytes(item["content"])
+                    if getattr(client, "token", True) is None:
+                        client.authenticate()
+                    remote_token = client.upload_attachment(path, app_token)
+                portal_store.mark_attachment_synced(
+                    item["kind"], item["local_id"], item["field_name"], item["file_token"], remote_token)
+                result["synced"] += 1
+            except Exception as error:
+                portal_store.mark_attachment_failed(
+                    item["kind"], item["local_id"], item["field_name"], item["file_token"], str(error))
+                result["failed"] += 1
+        for item in portal_store.pending_deletions(limit):
+            try:
+                client.request("DELETE", _path(app_token, item["kind"]) + "/records/" + item["feishu_record_id"])
+                portal_store.mark_deletion_synced(item["kind"], item["local_id"])
+                result["synced"] += 1
+            except Exception as error:
+                portal_store.mark_deletion_failed(item["kind"], item["local_id"], str(error))
+                result["failed"] += 1
+        for item in portal_store.pending_records(limit):
+            try:
+                remote_id = item.get("feishu_record_id")
+                if remote_id:
+                    record = client.request("PUT", _path(app_token, item["kind"]) + "/records/" + remote_id,
+                                            body={"fields": portal_store.fields_for_feishu(
+                                                item["kind"], item["local_id"], dict(item["pending_fields"]))})["record"]
+                else:
+                    record = client.request("POST", _path(app_token, item["kind"]) + "/records",
+                                            body={"fields": portal_store.fields_for_feishu(
+                                                item["kind"], item["local_id"], dict(item["fields"]))})["record"]
+                    remote_id = record["record_id"]
+                portal_store.mark_synced(item["kind"], item["local_id"], item["version"], remote_id)
+                result["synced"] += 1
+            except Exception as error:
+                portal_store.mark_failed(item["kind"], item["local_id"], item["version"], str(error))
+                result["failed"] += 1
     return result
 
 
@@ -52,10 +109,14 @@ def pull_from_feishu(client=None, app_token: str | None = None) -> dict:
     from portal_data import _path
 
     counts = {}
+    from portal_data import refresh_candidate_form_schema
+    refresh_candidate_form_schema(client, app_token)
     for kind in sorted(portal_store.KINDS):
         count = 0
         for record in client.pages(_path(app_token, kind) + "/records"):
-            portal_store.mirror_record(kind, record)
+            local = portal_store.mirror_record(kind, record)
+            if local:
+                _cache_remote_attachments(client, kind, local["local_id"], record.get("fields") or {})
             count += 1
         counts[kind] = count
     return counts

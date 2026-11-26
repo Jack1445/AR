@@ -5,14 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#ffffff">
   <title>TALENT · 人才与机会</title>
-  <meta name="description" content="在本地浏览飞书多维表格中的候选人与校友招聘需求。">
+  <meta name="description" content="浏览 PostgreSQL 主库中的候选人与校友招聘需求。">
   <link rel="icon" href="talent-wordmark.svg?v=1" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
-  <link rel="stylesheet" href="theme.css">
-  <script src="data.js" defer></script>
+  <link rel="stylesheet" href="theme.css?v=29">
   <script src="app.js" defer></script>
   <script src="accounts.js" defer></script>
-  <script src="match.js" defer></script>
+  <script src="match.js?v=29" defer></script>
   <script src="ai_history.js" defer></script>
 </head>
 <body>
@@ -46,12 +45,12 @@
 
       <div class="sidebar-bottom">
         <div class="future-card"><span class="future-icon" aria-hidden="true">✦</span><span class="future-label">匹配工作台</span><strong>先筛选，再评估</strong><p>按 JD 标签初筛候选人，查看 AI 契合度。</p><span class="future-pill">本地运行</span></div>
-        <div class="sidebar-foot"><span class="live-dot"></span> 本地工作台 <span class="foot-separator">/</span> 飞书数据快照</div>
+        <div class="sidebar-foot"><span class="live-dot"></span> PostgreSQL 主数据 <span class="foot-separator">/</span> 飞书同步</div>
       </div>
     </aside>
 
     <main class="main-content" id="mainContent">
-      <header class="topbar"><div class="breadcrumb"><span>工作台</span><span class="breadcrumb-slash">/</span><strong>总览</strong></div><div class="topbar-right"><span class="local-tag"><span class="live-dot"></span> 本地数据</span><span class="today" id="todayLabel"></span></div></header>
+      <header class="topbar"><div class="breadcrumb"><span>工作台</span><span class="breadcrumb-slash">/</span><strong>总览</strong></div><div class="topbar-right"><span class="local-tag"><span class="live-dot"></span> SQL 主数据</span><span class="today" id="todayLabel"></span></div></header>
 
       <div id="overviewView" class="page-view">
       <section class="intro" aria-labelledby="pageTitle">
@@ -82,7 +81,7 @@
 
       <div id="directoryView" class="page-view" hidden>
 
-      <section class="workspace-head" aria-labelledby="workspaceTitle"><div><div class="section-kicker">EXPLORE THE DATA</div><h2 id="workspaceTitle">人才与岗位一览</h2><p>浏览已同步到本地的飞书多维表格内容。</p></div><button class="refresh-button" type="button" id="refreshButton" title="检查飞书是否有更新"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg><span class="refresh-label">检查飞书更新</span></button></section>
+      <section class="workspace-head" aria-labelledby="workspaceTitle"><div><div class="section-kicker">EXPLORE THE DATA</div><h2 id="workspaceTitle">人才与岗位一览</h2><p>浏览 PostgreSQL 主库中的候选人与校友招聘需求。</p></div><button class="refresh-button" type="button" id="refreshButton" title="立即与飞书双向同步"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg><span class="refresh-label">同步飞书</span></button></section>
 
       <div class="notice" id="missingNotice" role="status" hidden></div>
       <div class="sync-feedback" id="syncFeedback" role="status" hidden></div>
@@ -146,12 +145,12 @@
       <div id="matchView" class="page-view match-view" hidden>
         <section class="section-hero match-hero"><div class="section-kicker">AI MATCHING / JD WORKSPACE</div><h1>岗位匹配<span class="hero-blue-dot">.</span></h1><p id="matchJobLabel">选择一条 JD，先筛选，再对候选人进行 AI 评估。</p></section>
         <div class="match-toolbar"><button id="matchChangeJob" type="button" class="match-quiet-button">← 更换 JD</button><span id="matchJobTagStatus" class="match-toolbar-status">JD 标签待检查</span><button id="matchTagJob" type="button" class="match-outline-button">AI 为此 JD 打标签</button><button id="matchTagCandidates" type="button" class="match-outline-button">检查并补齐候选人标签</button><button id="matchApplyJobTags" type="button" class="match-outline-button">按 JD 标签初筛</button><button id="matchEditTagRules" type="button" class="match-outline-button">编辑标签规则 ↗</button></div>
-        <div id="matchProgress" class="match-progress" role="status" hidden></div>
+        <div id="matchProgress" class="match-progress" role="status" hidden><span id="matchProgressText"></span><button id="matchRefreshStaleData" type="button" class="match-refresh-data" hidden>刷新数据</button></div>
         <details id="matchTagProgressPanel" class="match-tag-progress" hidden><summary>查看打标签进度 <span id="matchTagProgressSummary">尚未开始</span></summary><div class="match-tag-progress-body"><div class="match-tag-progress-track"><progress id="matchTagProgressBar" max="1" value="0"></progress><strong id="matchTagProgressFraction">0 / 0</strong></div><p id="matchTagProgressCurrent">等待开始</p><div class="match-tag-progress-actions"><button id="matchStopTagging" type="button" class="match-stop-button" disabled>停止打标签</button><span>停止后不再请求后续记录；已发出的服务端请求可能仍会完成。</span></div><ol id="matchTagProgressLog" aria-label="打标签记录"></ol></div></details>
         <details id="matchEvalProgressPanel" class="match-tag-progress" hidden><summary>查看 AI 评估进度 <span id="matchEvalProgressSummary">尚未开始</span></summary><div class="match-tag-progress-body"><div class="match-tag-progress-track"><progress id="matchEvalProgressBar" max="1" value="0"></progress><strong id="matchEvalProgressFraction">0 / 0</strong></div><p id="matchEvalProgressCurrent">等待开始</p><div class="match-tag-progress-actions"><button id="matchStopEvaluation" type="button" class="match-stop-button" disabled>停止评估</button><span>停止后不再评估后续候选人；已发出的服务端请求可能仍会完成。</span></div><ol id="matchEvalProgressLog" aria-label="AI 评估记录"></ol></div></details>
         <div class="match-workspace">
-          <aside class="match-filter-card"><div class="match-card-heading"><span class="ai-card-number">01</span><div><h2>代码初筛</h2><p>设置条件，即时从候选人库筛选。</p></div></div><label class="ai-field-label" for="matchKeyword">关键词</label><input id="matchKeyword" class="ai-field" type="search" placeholder="姓名、意向、标签…" autocomplete="off"><div id="matchFilterGroups"></div><button id="matchResetFilters" type="button" class="match-reset-button">清空条件</button><div class="match-filter-note">每类中满足任一标签；不同类别同时满足。未打标签的候选人不会命中标签条件。</div></aside>
-          <section class="match-results-card"><div class="match-results-head"><div><div class="section-kicker">CANDIDATE SHORTLIST</div><h2>初筛结果 <span id="matchCount">0</span></h2><p>先评估，再确认是否推荐给当前 JD；可勾选多人批量操作。</p></div><div class="match-bulk-actions"><button id="matchEvaluate" class="ai-primary-button" type="button">AI 评估所选 <span id="matchSelectedCount">0</span> 人 ↗</button><button id="matchConfirmSelected" class="match-outline-button" type="button">确认推荐所选 <span id="matchConfirmCount">0</span> 人 ↗</button></div></div><div class="match-table-wrap"><table class="match-table"><thead><tr><th><input id="matchSelectAll" type="checkbox" aria-label="全选当前筛选结果"></th><th>候选人</th><th>AI 标签</th><th>契合程度</th><th>评估依据</th><th>推荐</th></tr></thead><tbody id="matchRows"></tbody></table></div><div class="match-results-foot">AI 星级仅供参考。确认推荐后，校友端才会看到该候选人。</div></section>
+          <aside class="match-filter-card"><div class="match-card-heading"><span class="ai-card-number">01</span><div><h2>代码初筛</h2><p>硬性条件自动执行，标签条件可继续调整。</p></div></div><section class="match-hard-panel" aria-labelledby="matchHardTitle"><div class="match-hard-head"><h3 id="matchHardTitle">硬性匹配</h3><span id="matchHardSummary">等待检查</span></div><dl id="matchHardCriteria" class="match-hard-criteria"></dl><details id="matchHardFailures" class="match-hard-failures" hidden><summary id="matchHardFailuresSummary">未通过 0 人</summary><div id="matchHardFailureList"></div></details></section><div id="matchFilterGroups"></div><button id="matchResetFilters" type="button" class="match-reset-button">清空标签条件</button><div class="match-filter-note">硬性条件必须全部满足；标签条件只用于进一步缩小结果。</div></aside>
+          <section class="match-results-card"><div class="match-results-head"><div><div class="section-kicker">CANDIDATE SHORTLIST</div><h2>初筛结果 <span id="matchCount">0</span></h2><p>先通过六项硬性条件，再进入 AI 深度评估；可勾选多人批量操作。</p></div><div class="match-bulk-actions"><button id="matchEvaluate" class="ai-primary-button" type="button">AI 评估所选 <span id="matchSelectedCount">0</span> 人 ↗</button><button id="matchConfirmSelected" class="match-outline-button" type="button">确认推荐所选 <span id="matchConfirmCount">0</span> 人 ↗</button></div></div><div class="match-table-wrap"><table class="match-table"><thead><tr><th><input id="matchSelectAll" type="checkbox" aria-label="全选当前筛选结果"></th><th>候选人</th><th>AI 标签（含 AI 评估岗位）</th><th>契合程度</th><th>评估依据</th><th>推荐</th></tr></thead><tbody id="matchRows"></tbody></table></div><div class="match-results-foot">硬性条件包括地点、出勤方式、岗位类别、岗位方向、到岗日期和每周到岗天数。AI 星级仅供参考。</div></section>
         </div>
       </div>
 
@@ -192,5 +191,6 @@
   <dialog id="accountCreateDialog" class="account-dialog"><form id="accountCreateForm" method="dialog"><div class="account-dialog-head"><div><span>NEW ACCOUNT</span><h2>新增账号</h2></div><button type="button" data-account-close="accountCreateDialog" aria-label="关闭">×</button></div><label>账号类型<select id="accountCreateRole" required><option value="candidate">候选人</option><option value="alumni">校友</option></select></label><label>手机号<input id="accountCreatePhone" type="tel" inputmode="numeric" maxlength="11" placeholder="11 位中国大陆手机号" required></label><label>初始密码<input id="accountCreatePassword" type="password" minlength="5" maxlength="200" autocomplete="new-password" placeholder="至少 5 位" required></label><p class="account-dialog-note">候选人登录后填写个人资料；校友登录后填写企业资料并新增岗位。</p><div id="accountCreateStatus" class="account-dialog-status" role="status"></div><div class="account-dialog-actions"><button type="button" class="match-outline-button" data-account-close="accountCreateDialog">取消</button><button type="submit" class="data-primary-button">创建账号</button></div></form></dialog>
   <dialog id="accountDeleteDialog" class="account-dialog account-delete-dialog"><form id="accountDeleteForm" method="dialog"><input id="accountDeleteId" type="hidden"><input id="accountDeleteRole" type="hidden"><div class="account-dialog-head"><div><span>DELETE ACCOUNT</span><h2>确认删除账号</h2></div><button type="button" data-account-close="accountDeleteDialog" aria-label="关闭">×</button></div><p id="accountDeleteSummary" class="account-delete-summary"></p><div id="accountDeleteImpact" class="account-delete-impact"></div><label>输入完整手机号确认<input id="accountDeletePhone" type="tel" inputmode="numeric" maxlength="11" autocomplete="off" required></label><div id="accountDeleteStatus" class="account-dialog-status" role="status"></div><div class="account-dialog-actions"><button type="button" class="match-outline-button" data-account-close="accountDeleteDialog">取消</button><button type="submit" class="account-danger-button">删除账号及关联数据</button></div></form></dialog>
 
+  <dialog id="matchEvaluationReuseDialog" class="match-reuse-dialog" aria-labelledby="matchEvaluationReuseTitle"><form method="dialog"><div class="match-reuse-head"><div><span>AI EVALUATION</span><h2 id="matchEvaluationReuseTitle">沿用已有评估？</h2></div><button type="submit" value="cancel" class="match-reuse-close" aria-label="关闭">×</button></div><p id="matchEvaluationReuseSummary" class="match-reuse-summary"></p><div class="match-reuse-note"><strong>已有结果不会自动覆盖。</strong><span>你可以保留它们，只评估尚未分析的候选人；也可以对本次所选人员全部重新调用 AI。</span></div><div class="match-reuse-actions"><button type="submit" value="refresh" class="match-reuse-secondary"><span>重新评估全部</span><small>忽略已有结果，重新调用 AI</small></button><button type="submit" value="reuse" class="match-reuse-primary"><span>沿用已有结果</span><small>仅评估其余候选人</small></button></div></form></dialog>
 </body>
 </html>

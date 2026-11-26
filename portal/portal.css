@@ -361,3 +361,11 @@ body,.candidate-mode,.alumni-mode{background:var(--talent-paper);color:var(--tal
 /* Alumni actions live in the welcome hero; remove the duplicated section heading space. */
 .alumni-mode #dashboard>.page-heading{margin-bottom:24px}.alumni-mode #dashboard>.page-heading .alumni-workspace-actions{display:flex;align-items:center;gap:9px;flex:none;padding-top:2px}.alumni-mode #dashboardMessage{display:none!important}.alumni-workspace{padding-top:18px}
 @media(max-width:850px){.alumni-mode #dashboard>.page-heading{flex-direction:column}.alumni-mode #dashboard>.page-heading .alumni-workspace-actions{width:100%;padding-top:0}.alumni-mode #dashboard>.page-heading .alumni-workspace-actions button{flex:1}}
+
+/* Expanded candidate details: profile first, AI assessment second. */
+.pipeline-detail-grid{grid-template-columns:1fr}
+.candidate-profile-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+.candidate-profile-section .candidate-profile-grid{max-height:none;overflow:visible;padding-right:0}
+@media(max-width:1050px){.candidate-profile-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:700px){.candidate-profile-grid{grid-template-columns:1fr}}
+.candidate-assessment-summary{display:flex;align-items:flex-start;gap:4px;color:#343431;font-size:13px;line-height:1.65}.candidate-assessment-summary strong{flex:none;color:#2f6f4f}.candidate-assessment-block{margin-top:12px;padding-top:10px;border-top:1px solid #deded9}.candidate-assessment-block>strong{font-size:12px}.candidate-assessment-block ul{display:grid;gap:8px;margin:7px 0 0;padding-left:18px}.candidate-assessment-block li{color:#4a4a46;font-size:12px;line-height:1.6;white-space:pre-line}

@@ -2,8 +2,9 @@ const role = location.pathname.startsWith("/alumni/") ? "alumni" : "candidate";
 const api = `/api/${role}`;
 const $ = id => document.getElementById(id);
 const data = { me: null, jobs: [], recommendations: [], registering: false, manualMode: false, analysisResult: null, chatMessages: [], chatFields: {}, chatBusy: false, chatThinking: false, chatScrollTarget: null, completionAnnounced: false, sessionExpired: false, portalVersionChecked: false, companyPrompted: false, jobPrompted: false, companyOnboarding: false, resumeObjectUrl: null, resumeRequestId: 0 };
-const baseFieldName = "意向base地（可多选）";
+const baseFieldName = "意向base地（eg.北京,上海）";
 const baseOtherFieldName = "意向base地（可多选）-其他-补充内容";
+const requiredPortalRevision = 35;
 
 function node(tag, className = "", value = "") {
   const element = document.createElement(tag);
@@ -687,7 +688,7 @@ async function refreshAlumni() {
   if (!data.portalVersionChecked) {
     const healthResponse = await fetch("/health", { cache: "no-store" });
     const health = await healthResponse.json();
-    if (!healthResponse.ok || !health.local_recommendations || health.alumni_company_fields !== 2 || health.portal_revision !== 31 || !health.local_primary) {
+    if (!healthResponse.ok || !health.local_recommendations || health.alumni_company_fields !== 2 || health.portal_revision !== requiredPortalRevision || !health.local_primary) {
       saveNotice("校友端仍在运行旧版服务。请关闭旧服务窗口，再运行“打开校友端.cmd”，然后刷新页面。", false);
     } else data.portalVersionChecked = true;
   }
@@ -842,7 +843,7 @@ function editJob(job) {
 }
 const alumniCandidateProfileFields = [
   { label: "当前求职类别", aliases: ["当前求职类别（多选）", "当前求职类别"] },
-  { label: "意向base地", aliases: ["意向base地（可多选）", "意向base地"] },
+  { label: "意向base地", aliases: ["意向base地（eg.北京,上海）", "意向base地（可多选）", "意向base地"] },
   { label: "意向出勤方式", aliases: ["意向出勤方式"] },
   { label: "意向岗位", aliases: ["意向岗位"] },
   { label: "最早到岗时间", aliases: ["最早到岗时间"], date: true },
@@ -882,6 +883,26 @@ function selectedCandidateProfile(profile) {
     return { label: field.label, value: field.date ? formatCandidateProfileDate(value) : value || "未填写" };
   });
 }
+function appendAssessmentContent(host, rec) {
+  const assessment = rec.assessment;
+  if (!assessment || typeof assessment !== "object" || !assessment.schema_version) {
+    host.append(node("p", "", rec.reason || "暂无评估依据"));
+    return;
+  }
+  const summary = node("div", "candidate-assessment-summary");
+  const recommendation = Number(rec.stars) >= 4 ? "推荐" : Number(rec.stars) === 3 ? "谨慎推荐" : "不推荐";
+  summary.append(node("strong", "", `【${recommendation}】`), node("span", "", assessment.summary || ""));
+  host.append(summary);
+  const legacy = Number(rec.stars) >= 3 ? assessment.advantages : assessment.risks;
+  const items = Array.isArray(assessment.details) ? assessment.details : (Array.isArray(legacy) ? legacy : []);
+  if (!items.length) return;
+  const section = node("div", "candidate-assessment-block");
+  section.append(node("strong", "", Number(rec.stars) >= 3 ? "匹配依据" : "低分原因"));
+  const list = node("ul", "");
+  for (const item of items) list.append(node("li", "", `简历事实：${item.resume_evidence || ""}\n对应JD：${item.jd_requirement || ""}\n${item.analysis || ""}`));
+  section.append(list);
+  host.append(section);
+}
 function pipelineCandidateRow(rec) {
   const row = node("article", "pipeline-candidate-row");
   row.classList.add(`pipeline-row-${statusClass(rec.status)}`);
@@ -917,8 +938,9 @@ function pipelineCandidateRow(rec) {
   detailToggle.setAttribute("aria-expanded", "false");
   const detailGrid = node("div", "pipeline-detail-grid pipeline-detail-panel");
   detailGrid.hidden = true;
-  const reason = node("section", "");
-  reason.append(node("small", "", "AI 评估依据"), node("p", "", rec.reason || "暂无评估依据"));
+  const reason = node("section", "candidate-ai-section");
+  reason.append(node("small", "", "AI 评估依据"));
+  appendAssessmentContent(reason, rec);
   const profile = node("section", "candidate-profile-section");
   profile.append(node("small", "", "候选人资料"));
   const profileGrid = node("div", "candidate-profile-grid");
@@ -928,7 +950,7 @@ function pipelineCandidateRow(rec) {
     profileGrid.append(field);
   }
   profile.append(profileGrid);
-  detailGrid.append(reason, profile);
+  detailGrid.append(profile, reason);
   detailToggle.addEventListener("click", () => {
     const expanded = detailToggle.getAttribute("aria-expanded") === "true";
     detailToggle.setAttribute("aria-expanded", String(!expanded));

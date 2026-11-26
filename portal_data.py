@@ -50,7 +50,7 @@ CANDIDATE_NAME_FIELD = "姓名"
 CANDIDATE_PHONE_FIELD = "手机号/微信号"
 SOURCE_CANDIDATE_NAME_FIELD = "姓名"
 SOURCE_CANDIDATE_PHONE_FIELD = "手机号/微信号"
-BASE_FIELD = "意向base地（可多选）"
+BASE_FIELD = "意向base地（eg.北京,上海）"
 BASE_OTHER_FIELD = "意向base地（可多选）-其他-补充内容"
 CONSENT_FIELD = "是否同意奇绩被投企业与你直接取得联系？"
 CONSENT_OTHER_FIELD = "是否同意奇绩被投企业与你直接取得联系？-其他-补充内容"
@@ -61,11 +61,27 @@ REQUIRED_CANDIDATE_FIELDS = {
     CONSENT_FIELD,
 }
 ALLOWED_WRITES = {"candidate_output", "alumni_output"}
-HIDDEN_CANDIDATE_FIELDS = {"来源"}
+HIDDEN_CANDIDATE_FIELDS = {"来源", BASE_OTHER_FIELD}
 
 
 def _visible_candidate_schema(schema: list[dict]) -> list[dict]:
-    return [item for item in schema if item.get("name") not in HIDDEN_CANDIDATE_FIELDS]
+    position_options = None
+    if portal_store.enabled():
+        try:
+            from matching_domain import taxonomy
+            position_options = [row["label"] for row in taxonomy()]
+        except Exception:
+            position_options = None
+    result = []
+    for source in schema:
+        if source.get("name") in HIDDEN_CANDIDATE_FIELDS:
+            continue
+        item = dict(source)
+        item["required"] = item.get("name") in REQUIRED_CANDIDATE_FIELDS
+        if item.get("name") == "意向岗位" and position_options:
+            item["options"] = position_options
+        result.append(item)
+    return result
 
 
 def _table(kind: str) -> str:
@@ -104,35 +120,36 @@ def _field(record: dict, name: str) -> str:
     return _text((record.get("fields") or {}).get(name)).strip()
 
 
-def candidate_form_schema(client: Client, app_token: str) -> list[dict]:
-    """Describe current Feishu columns that a candidate may see or edit."""
-    stale = None
-    if portal_store.enabled():
-        cached = portal_store.get_schema("candidate_output")
-        if cached is not None:
-            return _visible_candidate_schema(cached)
-        stale = portal_store.get_schema("candidate_output", max_age_seconds=None)
+def refresh_candidate_form_schema(client: Client, app_token: str) -> list[dict]:
     schema = []
-    try:
-        for field in client.pages(_path(app_token, "candidate_output") + "/fields"):
-            name, kind = field.get("field_name", ""), field.get("type")
-            if not name or name.startswith(PREFIX) or name in HIDDEN_CANDIDATE_FIELDS or name == CONSENT_OTHER_FIELD or kind not in {1, 3, 4, 5, 17}:
-                continue
-            properties = field.get("property") or {}
-            options = [item["name"] for item in properties.get("options", []) if item.get("name")]
-            if name == CONSENT_FIELD:
-                options = [option for option in options if option != "其他"]
-            schema.append({"name": name, "type": kind,
-                           "options": options,
-                           "required": name in REQUIRED_CANDIDATE_FIELDS,
-                           "readonly": name == CANDIDATE_PHONE_FIELD or bool(properties.get("auto_fill"))})
-    except Exception:
-        if stale is not None:
-            return stale
-        raise
+    for field in client.pages(_path(app_token, "candidate_output") + "/fields"):
+        name, kind = field.get("field_name", ""), field.get("type")
+        if not name or name.startswith(PREFIX) or name in HIDDEN_CANDIDATE_FIELDS or name == CONSENT_OTHER_FIELD or kind not in {1, 3, 4, 5, 17}:
+            continue
+        properties = field.get("property") or {}
+        options = [item["name"] for item in properties.get("options", []) if item.get("name")]
+        if name == CONSENT_FIELD:
+            options = [option for option in options if option != "其他"]
+        schema.append({"name": name, "type": kind,
+                       "options": options,
+                       "required": name in REQUIRED_CANDIDATE_FIELDS,
+                       "readonly": name == CANDIDATE_PHONE_FIELD or bool(properties.get("auto_fill"))})
     if portal_store.enabled():
         portal_store.save_schema("candidate_output", schema)
     return _visible_candidate_schema(schema)
+
+
+def candidate_form_schema(client: Client, app_token: str) -> list[dict]:
+    """Describe the SQL-cached candidate form; Feishu refreshes it asynchronously."""
+    if portal_store.enabled():
+        cached = portal_store.get_schema("candidate_output", max_age_seconds=None)
+        if cached is not None:
+            return _visible_candidate_schema(cached)
+        raise RuntimeError("候选人字段尚未同步到 PostgreSQL，请稍后重试")
+    try:
+        return refresh_candidate_form_schema(client, app_token)
+    except Exception:
+        raise
 
 
 def _now() -> str:
@@ -141,9 +158,7 @@ def _now() -> str:
 
 def _records(client: Client, app_token: str, kind: str) -> list[dict]:
     if portal_store.enabled() and kind in ALLOWED_WRITES:
-        local = portal_store.list_records(kind)
-        if local:
-            return [{"record_id": row["local_id"], "fields": dict(row["fields"])} for row in local]
+        return [{"record_id": row["local_id"], "fields": dict(row["fields"])} for row in portal_store.list_records(kind)]
     records = list(client.pages(_path(app_token, kind) + "/records"))
     if portal_store.enabled() and kind in ALLOWED_WRITES:
         for record in records:
@@ -158,6 +173,7 @@ def _record(client: Client, app_token: str, kind: str, record_id: str) -> dict:
         local = portal_store.get_record(kind, record_id)
         if local:
             return {"record_id": local["local_id"], "fields": dict(local["fields"])}
+        raise ValueError("记录不存在")
     value = client.request("GET", _path(app_token, kind) + "/records/" + record_id).get("record")
     if not value:
         raise ValueError("记录不存在")
@@ -169,19 +185,19 @@ def _record(client: Client, app_token: str, kind: str, record_id: str) -> dict:
 def _create(client: Client, app_token: str, kind: str, fields: dict) -> dict:
     if kind not in ALLOWED_WRITES:
         raise ValueError("写入目标无效")
-    record = client.request("POST", _path(app_token, kind) + "/records", body={"fields": fields})["record"]
     if portal_store.enabled():
-        portal_store.mirror_record(kind, record)
-    return record
+        row = portal_store.create_record(kind, fields)
+        return {"record_id": row["local_id"], "fields": dict(row["fields"])}
+    return client.request("POST", _path(app_token, kind) + "/records", body={"fields": fields})["record"]
 
 
 def _update(client: Client, app_token: str, kind: str, record_id: str, fields: dict) -> dict:
     if kind not in ALLOWED_WRITES:
         raise ValueError("写入目标无效")
-    record = client.request("PUT", _path(app_token, kind) + "/records/" + record_id, body={"fields": fields})["record"]
     if portal_store.enabled():
-        portal_store.mirror_record(kind, record, partial=True)
-    return record
+        row = portal_store.merge_fields(kind, record_id, fields)
+        return {"record_id": row["local_id"], "fields": dict(row["fields"])}
+    return client.request("PUT", _path(app_token, kind) + "/records/" + record_id, body={"fields": fields})["record"]
 
 
 def ensure_schema() -> dict:
@@ -213,6 +229,8 @@ def ensure_schema() -> dict:
                         created.append(name)
                         time.sleep(0.16)
             result[kind] = created
+        if portal_store.enabled():
+            refresh_candidate_form_schema(client, app_token)
     return result
 
 
@@ -385,9 +403,6 @@ def save_candidate(identity: dict, *, name: str | None = None, description: str 
                 fields[field_name] = value
         if CANDIDATE_NAME_FIELD in fields:
             name = fields[CANDIDATE_NAME_FIELD] or ""
-        selected_bases = fields.get(BASE_FIELD)
-        if selected_bases is not None and "其他" not in selected_bases:
-            fields[BASE_OTHER_FIELD] = None
     if name is not None:
         if not isinstance(name, str) or len(name.strip()) > 80:
             raise ValueError("姓名过长")
@@ -404,9 +419,6 @@ def save_candidate(identity: dict, *, name: str | None = None, description: str 
     with WRITE_LOCK:
         current = account_data(identity)
         if form_fields is not None:
-            effective_bases = fields.get(BASE_FIELD, current["values"].get(BASE_FIELD))
-            if isinstance(effective_bases, list) and "其他" not in effective_bases:
-                fields[BASE_OTHER_FIELD] = None
             if draft:
                 if not current["submitted"]:
                     fields["AR_提交状态"] = "草稿"
@@ -443,6 +455,8 @@ def remove_candidate_attachment(identity: dict, field_name: str, index: int) -> 
         updates = {field_name: remaining, "AR_更新时间": _now()}
         if portal_store.enabled():
             portal_store.merge_fields("candidate_output", identity["id"], updates)
+            portal_store.prune_attachments("candidate_output", identity["id"], field_name,
+                                           [item["file_token"] for item in remaining])
         else:
             _update(client, app_token, "candidate_output", identity["id"], updates)
     return account_data(identity)
@@ -618,7 +632,7 @@ def list_recommendations(identity: dict) -> list[dict]:
             resume_count = len((local_record("candidate", candidate_id).get("fields") or {}).get("简历") or [])
         except (ValueError, StopIteration):
             resume_count = 0
-        result.append({"id": row["id"], "job_id": linked["record_id"] if linked else source_id, "job_title": _field(linked, "AR_岗位名称") if linked else "岗位推荐", "candidate_name": row["candidate_name"], "candidate_profile": row["candidate_profile"], "resume_count": resume_count, "stars": row["stars"], "reason": row["reason"], "status": row["status"]})
+        result.append({"id": row["id"], "job_id": linked["record_id"] if linked else source_id, "job_title": _field(linked, "AR_岗位名称") if linked else "岗位推荐", "candidate_name": row["candidate_name"], "candidate_profile": row["candidate_profile"], "resume_count": resume_count, "stars": row["stars"], "reason": row["reason"], "assessment": row.get("assessment") or {}, "status": row["status"]})
     return result
 
 
@@ -802,7 +816,7 @@ def feedback(identity: dict, recommendation_id: str, status: str) -> dict:
     return {"id": recommendation_id, "status": stored}
 
 
-def publish_recommendation(job_id: str, candidate_id: str, stars: int, reason: str, jd_text: str) -> dict:
+def publish_recommendation(job_id: str, candidate_id: str, stars: int, reason: str, jd_text: str, *, assessment: dict | None = None) -> dict:
     """Persist a manually confirmed match once, regardless of AI star rating."""
     from match_engine import _candidate_label, _job_text, candidate_profile
 
@@ -841,6 +855,6 @@ def publish_recommendation(job_id: str, candidate_id: str, stars: int, reason: s
             sync_business_outcomes()
             return {"published": True, "cached": True, "record_id": existing["id"]}
         owner = next((_field(row, "AR_账户ID") for row in rows if _field(row, "AR_记录类型") == "job" and (row["record_id"] == source[0] or job_id.startswith(_field(row, "AR_来源JD") + ":") and _field(row, "AR_来源JD"))), "")
-        result = recommendation_store.create(job_id, candidate_id, owner, name, profile[:12000], stars, reason[:600])
+        result = recommendation_store.create(job_id, candidate_id, owner, name, profile[:12000], stars, reason[:12000], assessment=assessment)
         sync_business_outcomes()
     return {"published": True, "cached": False, "record_id": result["id"]}

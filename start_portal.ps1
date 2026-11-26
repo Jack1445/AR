@@ -34,7 +34,7 @@ function Test-CurrentPortal {
             $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
             try {
                 $health = $reader.ReadToEnd() | ConvertFrom-Json
-                return ([int]$health.candidate_chat -eq 12 -and $health.local_recommendations -eq $true -and [int]$health.alumni_company_fields -eq 2 -and [int]$health.portal_revision -eq 31 -and $health.local_primary -eq $true)
+                return ([int]$health.candidate_chat -eq 12 -and $health.local_recommendations -eq $true -and [int]$health.alumni_company_fields -eq 2 -and [int]$health.portal_revision -eq 35 -and $health.local_primary -eq $true)
             }
             finally { $reader.Close() }
         } finally { $response.Close() }
